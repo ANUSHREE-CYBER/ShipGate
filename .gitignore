@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtual environment
+venv/
+
+# Generated data — synthetic CSVs and the audit DB are reproducible, not source
+data/*.csv
+data/*.db
+data/*.sqlite3
