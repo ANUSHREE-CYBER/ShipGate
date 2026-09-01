@@ -873,3 +873,180 @@ away.
 - **`get_audit` loads every decision for an order.** Fine at 1–2 decisions per
   order. If an order were re-scored hundreds of times it would be wasteful, and
   there is no pagination.
+
+---
+
+## 2026-09-01 (Step 7) — the API
+
+### Built
+
+**`app/main.py`** — FastAPI wrapper exposing exactly the four endpoints CLAUDE.md
+specifies, and nothing else.
+
+**`tests/test_main.py`** — 30 tests. Plus 11 more added to
+`tests/test_audit_service.py` for the orphan guard and batched writes. Suite
+total is now 175.
+
+`requirements.txt` pins `fastapi==0.141.1`, `uvicorn==0.52.4`, `httpx==0.28.1`
+(httpx is what FastAPI's `TestClient` runs on).
+
+```
+POST /risk/assess          score an order, return tier + action + reasons
+POST /orders/{id}/outcome  record whether it actually became an RTO
+POST /orders/{id}/override merchant override, requires a reason
+GET  /orders/{id}/audit    full audit trail for one order
+```
+
+`test_only_the_four_endpoints_exist` asserts the route table contains exactly
+those four. Scope freeze is a working rule, so it is enforced by a test rather
+than by remembering.
+
+### Design — ShipGate has no customer database, on purpose
+
+`/risk/assess` takes the customer-history counts (`completed_orders`,
+`returned_orders`, `refusals_in_last_3`) and the pincode counts as **inputs**
+rather than looking them up. Those facts belong to the merchant's own order
+system.
+
+This is the same stance the audit log already takes by storing no names, phone
+numbers or addresses. ShipGate is a decision layer over signals it is handed, not
+a second copy of the customer database. It is also what makes the locked pitch's
+"whether from transparent local rules or an upstream risk provider" literally
+true of the code: the service does not care where the signals came from.
+
+`/risk/assess` writes its decision to the audit log as a side effect. An
+assessment nobody can later account for is not much use to a merchant being asked
+why a customer was treated a particular way.
+
+### Requested change — validation on the outcome endpoint
+
+Step 6 flagged that nothing tied an outcome to a known order, so a typo in an
+order id would silently create an orphan row. That is now closed.
+
+`AuditLog.record_outcome` refuses an order that has never been scored, raising
+`UnknownOrderError` (a `ValueError` subclass, so existing callers that catch
+`ValueError` keep working, but distinguishable enough for the API to answer 404
+rather than 400 — "I have never heard of this order" is a different problem from
+"your request was malformed").
+
+The check is deliberate policy rather than a schema foreign key, and can be
+waived with `require_known_order=False` for the one legitimate case: a merchant
+back-loading historical outcomes for orders ShipGate never saw. The default is
+strict, because the overwhelmingly likelier cause of an unrecognised id is a
+typo, and a silent orphan in an audit log is worse than an error.
+
+Live, against a real uvicorn server:
+
+```
+POST /orders/LIVE-TYPO/outcome  ->  HTTP 404
+  no decision has ever been recorded for order 'LIVE-TYPO', so there is
+  nothing for this outcome to attach to - check the order id
+```
+
+`test_a_refused_outcome_leaves_nothing_behind` asserts the point of the guard: it
+is not merely that the caller gets an error, it is that the table stays empty.
+
+The same guard covers overrides, via `latest_decision_id`.
+
+### Error semantics
+
+| Code | Meaning |
+|---|---|
+| 404 | this order has never been scored, so there is nothing to attach to |
+| 422 | understood but unacceptable — reason too short, unknown action, malformed field, unknown policy |
+
+Every refusal carries a message that says what to do about it. The unknown-policy
+error lists the policies that do exist; the short-reason error states the
+minimum and echoes what was sent.
+
+Verified live:
+
+```
+POST /orders/LIVE-1/override {"reason": "ok"}  ->  HTTP 422
+  an override needs a reason of at least 10 characters - got 'ok'
+```
+
+An override with `"action": "block"` is rejected at the schema level. There is no
+block action anywhere in ShipGate, and the API must not be the place one gets
+invented.
+
+### Performance problem found and fixed — 107s backfill
+
+Rebuilding `data/audit.db` from the 10,000-order dataset took **107 seconds**.
+The cause was not the volume: 2,000 decisions into an in-memory database take
+0.1s. It was that every `record_*` call committed its own transaction, so the
+backfill did 20,000 separate commits and therefore 20,000 fsyncs.
+
+Per-call commits are *right* for the API — a decision should be durable the
+moment it is returned to the caller. They are wrong for a bulk load. Added an
+`AuditLog.batch()` context manager that holds one transaction open across many
+appends.
+
+**107s → 1.5s**, a ~70× improvement, and the counts and action mix come out
+identical.
+
+This mattered enough to fix rather than note because the README promises
+one-command setup, and two minutes of an apparently-hung terminal is a bad first
+impression in a demo video.
+
+Nothing about the append-only guarantee changes — `test_append_only_still_holds_inside_a_batch`
+asserts the triggers still fire during a batch. A failed batch rolls back whole
+rather than leaving the log half-written, which for an audit log is the
+behaviour you want:
+`test_a_failed_batch_leaves_no_half_written_trail`.
+
+### Verified end to end against a live server
+
+Not just `TestClient` — a real uvicorn process, driven with curl:
+
+```
+POST /risk/assess       action=nudge tier=high score=85 evidence=40
+POST .../override       422, reason too short
+POST .../override       accepted with a real reason
+POST .../outcome        accepted
+GET  .../audit
+
+  23:19:11 decision  Scored 85 (high) - recommended nudge
+  23:19:12 override  anushree overrode to ship: regular wholesale buyer, verified by phone
+  23:19:12 outcome   Recorded as RTO (source: courier)
+
+  final_action=ship  current_outcome=True
+```
+
+The reasons returned by `/risk/assess` are the ones a merchant would actually
+read:
+
+```
+Score 85 of a possible 145 puts this order in the high band for merchant 'default'.
+Largest contributors: Repeat refusal +40 (H1); COD order +25 (P1); High-value COD +10 (P2).
+Evidence score 40 - there is a real signal about this customer or address, not just context.
+Action chosen: nudge (the least disruptive step this policy allows at this tier).
+```
+
+Both `/risk/assess` and `/orders/{id}/audit` carry the synthetic-data disclaimer
+in the response body, so the caveat travels with the data rather than living only
+in the README.
+
+### Test-expectation error worth recording
+
+`test_override_without_a_real_reason_is_refused` initially indexed
+`r.json()["detail"][0]["msg"]`, assuming Pydantic's list-of-errors shape. Our
+short-reason refusal comes from `HTTPException`, whose `detail` is a plain
+string. The status code was right all along; the assertion was wrong. Second time
+this has happened — my test expectation being wrong rather than the code — and
+both times the temptation was to change the code first.
+
+### Not certain about
+
+- **A new SQLite connection is opened per request.** Correct and simple, since
+  connections are not thread-safe and FastAPI runs sync endpoints in a
+  threadpool. It also means every request pays connection setup. Fine at demo
+  scale; a real deployment wants a pool.
+- **No authentication of any kind.** Anyone who can reach the port can override a
+  decision as any actor they care to name. The `actor` field is self-reported and
+  entirely untrusted. This has to be stated plainly in the README rather than
+  left for a judge to notice — an audit trail whose "who did this" field is
+  unauthenticated is weaker than it looks.
+- **`_db_path` is a module-level global**, overridden by tests via monkeypatch.
+  It works and is honest, but a settings object would be tidier if the dashboard
+  step needs to point at a different database.
