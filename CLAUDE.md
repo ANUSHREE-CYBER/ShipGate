@@ -253,15 +253,19 @@ GET  /orders/{id}/audit    → full audit trail for one order
 
 These apply to me (the assistant), to you, and to Claude Code. Nobody skips these.
 
-1. **Explain before code.** Before writing any file, explain the approach in plain English first. If it doesn't match this brief, stop and flag it — don't just proceed.
-2. **One file at a time.** Build one module, stop, show it, wait for review. Never chain through multiple files unreviewed.
+1. **Explain before code.** The approach gets written out in plain English before the code exists — in the step summary and in the module docstring. It is no longer a gate that waits for approval, but if the approach doesn't match this brief, that is a stop-and-flag under rule 10.
+2. **Work a whole build step end to end.** From Sep 1 onward: design, code, hand-checks, tests and commits for one full step run without pausing for approval. Review happens after the step completes, not during it. *Within* a step the discipline is unchanged — build one module at a time and hand-check it before building anything on top of it. Only the approval gate moved, not the care.
 3. **Test every module by hand before moving on.** Pick 2–3 example orders yourself (a clean one, a repeat-refuser, a borderline one) and check the output makes sense before building the next piece on top.
 4. **Justify every number.** If a rule says +40, be able to say why 40 and not 30 — even if the honest answer is "starting estimate, will tune against data."
 5. **Commit in small patches, not big dumps.** One commit per module/feature, with a clear message — never one giant "built everything" commit.
 6. **Document daily, in Obsidian, same day — in plain, non-technical language.** What got built, what got tested, what changed and why. Write it for a reader with no technical background: short everyday sentences, no jargon, no code, no unexplained abbreviations. If a technical term is unavoidable, explain it in the same sentence the way you'd explain it to a friend. This becomes the README's reasoning section later — don't rebuild it from memory afterward.
 7. **Freeze scope.** If a new idea doesn't improve the end-to-end demo, the audit trail, or the cost evidence, don't build it. No more pivots, no more external re-validation — the plan is final.
 8. **No claims we haven't earned.** Every "honest metrics" and "synthetic ≠ production" caveat in this doc must appear in the real README and demo video, worded the same way.
-9. **Terminal commands don't need permission; code changes still do.** Run installs, scripts, tests, and other shell commands directly without asking first — the review gate is on files, not on the terminal. Rules 1 and 2 are unchanged: every new or edited file is still explained first and shown for review one at a time. Anything destructive or outward-facing (deleting data, `git push`, force operations, anything that leaves this machine) still gets confirmed first.
+9. **Terminal commands don't need permission.** Run installs, scripts, tests, and other shell commands directly without asking first. Anything destructive or outward-facing (deleting data, `git push`, force operations, anything that leaves this machine) still gets confirmed first.
+10. **The three things that survive working unsupervised.** Rule 2 removed the per-file approval gate. These three replace it and are non-negotiable:
+    - **a. `FINDINGS.md` gets written as you go.** Every bug found and how it was fixed, every real number, every judgement call. It is the source material for the README and demo script, so anything claimed there must be traceable to a measurement in it. Detail level does not drop because nobody is watching.
+    - **b. Stop and flag, mid-step, for two things only.** Something that materially contradicts a decision already made together, or something that changes what the demo can honestly claim. The Sep 1 cost-table problem is the reference case: the brief's own numbers made "do nothing" nearly optimal, which undercut the pitch. That is a stop, not a note in the summary. Ordinary bugs, surprises and judgement calls are not — those get fixed, logged, and reported at the end.
+    - **c. Every step ends with a written summary.** What got built, what broke and how it was fixed, what the numbers show, and — explicitly — anything not fully certain. The uncertainty line is mandatory, not optional; "nothing I'm unsure about" is a valid answer only when it is true.
 
 ---
 

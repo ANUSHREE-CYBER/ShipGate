@@ -389,3 +389,194 @@ been recomputed on the later 30% only.
   With `RELIABILITY_COEF = 0.85` of unobservable per-customer variance plus
   courier and weather noise, a high PR-AUC would be evidence of a bug. The lag=0
   incident above is the precedent.
+
+---
+
+## 2026-09-01 (Step 4) — chronological evaluation and the cost model
+
+### Built
+
+**`app/evaluation.py`** — 70/30 chronological split, PR-AUC, operating points at
+every tier boundary, the required breakdowns, the brief's cost table, and a
+graduated per-action cost model.
+
+**`tests/test_evaluation.py`** — 23 tests. Suite total is now 81.
+
+`requirements.txt` pins `scikit-learn==1.9.0`, used for
+`average_precision_score` and nothing else. Confusion matrices and all cost
+arithmetic are computed directly so they stay readable and auditable rather than
+hidden behind a library call.
+
+Split: train 7,000 orders (Jun-01 → Aug-09), test 3,000 (Aug-09 → Aug-29). Every
+number below is from the test slice.
+
+### Judgement call — the headline PR-AUC is COD-only
+
+Prepaid orders fire nothing in the payment group and almost all land in Low.
+Including them lets a ranking metric take credit for separating prepaid from COD,
+which is not a prediction — payment method is known at checkout.
+
+| Metric | Value | Prevalence baseline | Lift |
+|---|---|---|---|
+| **PR-AUC, COD only** | **0.417** | 0.312 | 1.34× |
+| PR-AUC, all orders | 0.392 | 0.199 | 1.97× |
+
+Note the all-orders figure has the *higher* lift while being the less honest
+number. Both are printed so the gap is visible rather than hidden. **Quote 0.417.**
+
+Modest, and it should be. A large share of failure variance is invisible to the
+rules by construction (`RELIABILITY_COEF = 0.85`, courier strain, weather). This
+landed at the low end of the 0.4–0.55 predicted before running, so no leak-hunt
+was triggered.
+
+### Operating points (test slice, COD only)
+
+| Policy | TP | FP | FN | TN | Precision | Recall | F1 |
+|---|---|---|---|---|---|---|---|
+| medium+ (confirm and above) | 481 | 1,020 | 42 | 131 | 0.320 | 0.920 | 0.475 |
+| high+ (nudge and above) | 114 | 131 | 409 | 1,020 | 0.465 | 0.218 | 0.297 |
+| very_high (review only) | 20 | 10 | 503 | 1,141 | 0.667 | 0.038 | 0.072 |
+
+### Breakdowns (COD test orders)
+
+| Segment | n | RTO | PR-AUC | vs baseline |
+|---|---|---|---|---|
+| new (no resolved history) | 621 | 31.1% | 0.324 | 1.04× |
+| known | 1,053 | 31.3% | 0.454 | 1.45× |
+| gemstone | 359 | 29.8% | 0.401 | 1.35× |
+| fast_fashion | 1,315 | 31.6% | 0.423 | 1.34× |
+
+**The rules are near-useless on strangers.** New customers score 1.04× baseline —
+barely better than random ranking. Known customers reach 1.45×. That is the
+honest characterisation and it should be stated plainly rather than averaged
+away: ShipGate's value comes almost entirely from customers with delivery
+history. Consistent with Finding 2 — for a first-time buyer there is genuinely
+almost nothing to go on.
+
+Cohort PR-AUCs are close (0.401 vs 0.423), consistent with Finding 3.
+
+### Error found and fixed
+
+**Format string crash.** `"INR %+,.0f"` — `%`-formatting does not support comma
+grouping, unlike `str.format`. `ValueError: unsupported format character ','`.
+Replaced with a `_money()` helper using `"{:+,.0f}".format`. Trivial, caught on
+first run, recorded only because this log claims to record everything.
+
+Also removed two unused imports (`bisect`, `tier_from_score`) left from an
+earlier draft of the threshold sweep.
+
+### Finding 8 — the brief's cost table argues against the product
+
+This is the significant result of Step 4 and it was escalated mid-step rather
+than reported at the end.
+
+Under the brief's numbers, per order:
+
+```
+flag:        p·(+200) + (1−p)·(−300)
+don't flag:  p·(−200) + (1−p)·(+300)
+```
+
+Flagging wins only when **p > 0.60**. Missing a bad order costs 400 relative to
+catching it; disrupting a good one costs 600 relative to leaving it alone.
+
+| Policy | Flagged | Precision | Recall | Net value |
+|---|---|---|---|---|
+| reference: flag nothing | 0 | — | — | **₹+602,000** |
+| value-optimal on train (≥87) | 28 | 0.643 | 0.030 | ₹+603,200 |
+| conservative (≥61) | 248 | 0.468 | 0.195 | ₹+569,200 |
+| balanced (≥31) | 1,614 | 0.305 | 0.827 | ₹+126,600 |
+| reference: flag every COD | 1,674 | 0.312 | 0.878 | ₹+120,600 |
+| aggressive (≥21) | 1,960 | 0.280 | 0.921 | ₹−25,000 |
+| reference: flag everything | 3,000 | 0.199 | 1.000 | ₹−602,000 |
+
+**Doing nothing is very nearly optimal.** The best policy the rules can find beats
+shipping everything blind by ₹1,200 across 3,000 orders — about 40 paise per
+order. Our own Medium tier destroys ₹475,400 relative to inaction.
+
+The arithmetic is correct and pinned by `test_break_even_probability_is_sixty_percent`.
+The threshold of 87 was selected on train and applied unchanged to test, so this
+is not a hindsight artifact.
+
+**Root cause:** the −300 false-positive cost prices *every* intervention as
+"customer lost entirely, at full margin". That is the correct price for a hard
+block. It is the wrong price for a confirmation SMS, which is what the Medium
+tier actually does — and "least-disruptive action" is the entire pitch. As
+specified, the hero artifact proved the opposite of what the demo needs.
+
+### Finding 9 — the brief's table is exactly a hard block, and that is the argument
+
+Rather than change the brief's numbers, the resolution was to notice what they
+are. Modelling an action with three parameters — how often it prevents a real
+RTO, how often it loses a good customer, what it costs to run — and setting
+`prevent_rate = abandon_rate = 1.0` **reproduces the brief's +200/−300 swings
+exactly**. The brief's table is not a generic cost table; it is the arithmetic of
+a hard block.
+
+Absolute accounting used by the graduated model, per order:
+
+```
+delivered and kept   +300   (margin)
+came back as RTO     -200   (two-way freight)
+abandoned/cancelled     0   (no sale, but no freight either)
+minus the action's operating cost
+```
+
+`test_block_action_reproduces_the_briefs_swings` asserts the equivalence, so it
+is a derivation rather than a claim in a docstring.
+
+Each action then gets its own break-even, and **every tier clears the one
+belonging to its action**:
+
+| Action | Prevents | Abandons | Op cost | Break-even | Tier's measured RTO |
+|---|---|---|---|---|---|
+| confirmation / OTP | 35% | 3% | ₹5 | 17.7% | **27.6%** ✓ |
+| prepaid nudge | 55% | 12% | ₹15 | 34.9% | **49.1%** ✓ |
+| manual review | 75% | 20% | ₹40 | 47.6% | **66.7%** ✓ |
+| hard block | 100% | 100% | ₹0 | 60.0% | — |
+
+| Policy | Net value | vs shipping everything |
+|---|---|---|
+| ship everything (do nothing) | ₹602,000 | — |
+| **ShipGate graduated tiers** | **₹617,748** | **+₹15,748** |
+| confirm every order | ₹607,084 | +₹5,084 |
+| hard block Very High only | ₹603,000 | +₹1,000 |
+| hard block everything above Low | ₹365,500 | **−₹236,500** |
+
+Operational load: 1,390 ship · 1,409 confirm · 171 nudge · 30 review.
+
+**The demo's strongest single number is the last row.** Applying blunt blocking to
+*exactly the same orders* ShipGate intervenes on destroys ₹236,500, while the
+graduated policy gains ₹15,748. Same detection, same tiers, same scores — the
+entire ₹252,000 difference is choosing the least-disruptive action instead of the
+harshest one. That is the locked pitch, demonstrated rather than asserted.
+
+### The weakest link, stated plainly
+
+The prevent/abandon rates are **assumptions about human behaviour that no
+synthetic data can supply**. Nothing in this project measures how many real
+customers abandon after an OTP prompt. The report prints the sensitivity rather
+than burying it:
+
+| Action | Assumed abandon | Stops paying above |
+|---|---|---|
+| confirmation / OTP | 3% | **7%** |
+| prepaid nudge | 12% | 26% |
+| manual review | 20% | 60% |
+
+**The confirmation row is the fragile one.** 7% abandonment on an extra checkout
+step is entirely plausible in reality, and confirmation carries 1,409 of the
+1,610 interventions — so most of the ₹15,748 rests on that assumption. If a judge
+pushes on one number, it will be this one. The correct answer is that the model
+is explicit about exactly where it breaks, and that a real deployment would
+measure the rate rather than assume it. Do not present ₹15,748 as a projection of
+real savings.
+
+### Open question, deferred by decision
+
+Medium tier flags 54% of test orders at 0.305 precision. Under graduated costs it
+is justified (27.6% RTO against a 17.7% break-even) and contributes most of the
+gain — but that rests entirely on the 3% abandonment assumption above. Decision
+taken to leave the tier boundaries alone and revisit only if that assumption
+starts to look optimistic. Tuning rule boundaries against a metric derived from
+synthetic data is precisely what CLAUDE.md warns against.
