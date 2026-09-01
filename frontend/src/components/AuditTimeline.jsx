@@ -1,13 +1,9 @@
-const KIND_LABEL = {
-  decision: 'decided',
-  override: 'overridden',
-  outcome: 'outcome',
-}
+import { PackageSearch, PenLine, ScanLine } from 'lucide-react'
 
-const KIND_CLASS = {
-  decision: 'muted',
-  override: 'nudge',
-  outcome: 'confirm',
+const KINDS = {
+  decision: { label: 'decided', cls: 'muted', Icon: ScanLine },
+  override: { label: 'overridden', cls: 'nudge', Icon: PenLine },
+  outcome: { label: 'outcome', cls: 'confirm', Icon: PackageSearch },
 }
 
 export default function AuditTimeline({ events }) {
@@ -17,15 +13,20 @@ export default function AuditTimeline({ events }) {
 
   return (
     <ul className="timeline">
-      {events.map((event, i) => (
-        <li key={i}>
-          <span className="when">{event.at.replace('T', ' ')}</span>
-          <span className={`badge ${KIND_CLASS[event.kind] || 'muted'}`}>
-            {KIND_LABEL[event.kind] || event.kind}
-          </span>
-          <span>{event.summary}</span>
-        </li>
-      ))}
+      {events.map((event, i) => {
+        const kind = KINDS[event.kind] || { label: event.kind, cls: 'muted', Icon: ScanLine }
+        const { Icon } = kind
+        return (
+          <li key={i}>
+            <span className="when">{event.at.replace('T', ' ')}</span>
+            <span className={`badge ${kind.cls}`}>
+              <Icon size={13} strokeWidth={2.25} aria-hidden="true" />
+              {kind.label}
+            </span>
+            <span>{event.summary}</span>
+          </li>
+        )
+      })}
     </ul>
   )
 }

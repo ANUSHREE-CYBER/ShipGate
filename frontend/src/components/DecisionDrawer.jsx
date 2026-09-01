@@ -1,8 +1,13 @@
 import { Fragment, useEffect, useState } from 'react'
+import { ShieldAlert, X } from 'lucide-react'
 import { getAudit, postOutcome, postOverride } from '../api'
 import AuditTimeline from './AuditTimeline'
+import ActionBadge from './ActionBadge'
+import { useToast } from './Toast'
 
 const ACTIONS = ['ship', 'confirm', 'nudge', 'review']
+
+const request_label = (isRto) => (isRto === 'true' ? 'came back (RTO)' : 'delivered')
 
 const GROUP_LABELS = {
   payment: 'Payment exposure',
@@ -59,10 +64,10 @@ function RuleTable({ rules }) {
 }
 
 export default function DecisionDrawer({ orderId, onClose, onChanged }) {
+  const toast = useToast()
   const [trail, setTrail] = useState(null)
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
-  const [notice, setNotice] = useState(null)
 
   const [override, setOverride] = useState({ action: 'ship', reason: '', actor: '' })
   const [outcome, setOutcome] = useState({ is_rto: 'true', source: 'courier', note: '' })
@@ -74,7 +79,6 @@ export default function DecisionDrawer({ orderId, onClose, onChanged }) {
   useEffect(() => {
     setTrail(null)
     setError(null)
-    setNotice(null)
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orderId])
@@ -87,14 +91,19 @@ export default function DecisionDrawer({ orderId, onClose, onChanged }) {
 
   async function submitOverride(e) {
     e.preventDefault()
-    setBusy(true); setError(null); setNotice(null)
+    setBusy(true); setError(null)
     try {
-      await postOverride(orderId, override)
+      const result = await postOverride(orderId, override)
       setOverride({ ...override, reason: '' })
-      setNotice('Override recorded. The original recommendation stays on the trail.')
+      toast(
+        `${orderId}: overridden to ${result.final_action}. The ` +
+        `${result.recommended_action} recommendation stays on the trail.`,
+        'success',
+      )
       load()
       onChanged()
     } catch (err) {
+      toast(err.message, 'error')
       setError(err.message)
     } finally {
       setBusy(false)
@@ -103,7 +112,7 @@ export default function DecisionDrawer({ orderId, onClose, onChanged }) {
 
   async function submitOutcome(e) {
     e.preventDefault()
-    setBusy(true); setError(null); setNotice(null)
+    setBusy(true); setError(null)
     try {
       const result = await postOutcome(orderId, {
         is_rto: outcome.is_rto === 'true',
@@ -111,14 +120,16 @@ export default function DecisionDrawer({ orderId, onClose, onChanged }) {
         note: outcome.note || null,
       })
       setOutcome({ ...outcome, note: '' })
-      setNotice(
+      toast(
         result.superseded_earlier_outcome
-          ? 'Outcome corrected. The earlier one is still on the trail.'
-          : 'Outcome recorded.',
+          ? `${orderId}: outcome corrected. The earlier one is still on the trail.`
+          : `${orderId}: recorded as ${request_label(outcome.is_rto)}.`,
+        'success',
       )
       load()
       onChanged()
     } catch (err) {
+      toast(err.message, 'error')
       setError(err.message)
     } finally {
       setBusy(false)
@@ -140,15 +151,21 @@ export default function DecisionDrawer({ orderId, onClose, onChanged }) {
                   risk score · {decision.policy_tier.replace('_', ' ')} tier ·
                   {' '}evidence {decision.evidence_score}
                 </span>
-                <span className={`badge ${trail.final_action}`}>{trail.final_action}</span>
+                <ActionBadge action={trail.final_action} size={14} />
               </div>
             )}
           </div>
-          <button className="close" onClick={onClose}>Close</button>
+          <button className="close" onClick={onClose} aria-label="Close">
+            <X size={16} strokeWidth={2.4} />
+          </button>
         </header>
 
-        {error && <p className="error">{error}</p>}
-        {notice && <p className="ok">{notice}</p>}
+        {error && (
+          <p className="error inline">
+            <ShieldAlert size={15} strokeWidth={2.3} aria-hidden="true" />
+            {error}
+          </p>
+        )}
         {!trail && !error && <p className="loading">Loading…</p>}
 
         {decision && (

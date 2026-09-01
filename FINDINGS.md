@@ -1315,3 +1315,62 @@ actually measured. Every other figure in the README was pulled from
   safe, but nothing detects a hand-edited rule set with a stale JSON alongside.
 - **The demo video is not recorded**, and the README references figures the video
   will need to match. If any number changes, both need updating together.
+
+---
+
+## 2026-09-02 (evening) — dashboard visual pass
+
+Presentational only. **Zero Python files changed**, all five backend modules
+verified untouched by diff, API contract unchanged, 193 tests still passing.
+Everything below lives under `frontend/`.
+
+Two rounds, committed together because the diffs interleave in the same files.
+
+### Round 1 — charts, icons, type, hero, toasts
+
+- **recharts 3.10.** A diverging horizontal bar chart puts ShipGate (+₹15,748)
+  and blunt blocking (−₹236,500) on opposite sides of a zero line, so the
+  ₹252,248 spread is a visible gap rather than a subtraction the viewer has to
+  do. A second grouped chart puts each action's break-even beside its tier's
+  measured rate, making "justified" read as *the blue bar clears the grey one*.
+  Both charts kept their tables underneath — the chart is the argument, the table
+  is the evidence.
+- **lucide-react.** Icons on action badges, outcomes, timeline events and tabs.
+  This forced a small consolidation: the badge markup was duplicated between the
+  queue and the drawer, and is now one `ActionBadge` component. `FinalAction`
+  still renders `review → confirm` with the original struck through.
+- **Inter** via Google Fonts, with a full system fallback stack.
+- **Hero** replacing the flat masthead, and the synthetic-data warning restyled
+  as a deliberate element rather than a plain yellow box. Kept static — no new
+  data fetching.
+- **Toasts** replacing inline confirmation text. Errors surface in a toast *and*
+  stay inline in the drawer: a validation error you dismiss by accident is worse
+  than one shown twice.
+
+### Round 2 — layout
+
+- Sticky top bar at `z-index: 40`, below the drawer (50) and toasts (100). The
+  live order count reads `/orders?limit=1` rather than being lifted out of the
+  table, so it stays right on the cost tab and after an override. Falls back to
+  "queue unavailable" instead of showing a wrong number.
+- `--page-max: 1240px` and `--page-pad` tokens shared by the bar and the content,
+  so the brand mark lines up with the hero at any width.
+- Roomier panels, KPIs and table cells; the queue's filter row became a distinct
+  inset bar so controls and data read as separate zones.
+- Dividers between drawer sections, under panel headers leading into controls,
+  above the pager and under each chart. Trailing borders removed from last rows.
+
+### Costs
+
+Bundle grew 163 kB → 570 kB (51 kB → 169 kB gzipped), almost entirely recharts.
+Irrelevant on localhost, but it is committed in `dist/` and Vite prints an
+expected chunk-size warning.
+
+### Not certain about
+
+- **Inter needs network at page load.** Offline, the page silently falls back to
+  the system stack — plainer, not broken. Bundling it (`@fontsource/inter`) would
+  remove the risk at the cost of another dependency. **Unresolved, and it matters
+  because the demo video will be recorded against this UI.**
+- `.bar` CSS is now dead, the inline bar column having been replaced by the
+  chart. Left rather than widen the diff.

@@ -1,29 +1,23 @@
 import { useEffect, useState } from 'react'
+import { CircleDashed, PackageCheck, Undo2 } from 'lucide-react'
 import { listOrders } from '../api'
+import { FinalAction } from './ActionBadge'
 
 const PAGE_SIZE = 25
 
-function ActionBadge({ action }) {
-  return <span className={`badge ${action}`}>{action}</span>
-}
-
-function FinalAction({ row }) {
-  // When a human has overruled the system, show both. Hiding the original
-  // recommendation would make the queue disagree with the audit trail.
-  if (!row.was_overridden) return <ActionBadge action={row.final_action} />
-  return (
-    <span>
-      <span className="strike">{row.recommended_action}</span>
-      <span className="arrow">&rarr;</span>
-      <ActionBadge action={row.final_action} />
-    </span>
-  )
-}
-
 function Outcome({ value }) {
-  if (value === null) return <span className="badge muted">pending</span>
+  if (value === null) {
+    return (
+      <span className="badge muted">
+        <CircleDashed size={13} strokeWidth={2.25} aria-hidden="true" />
+        pending
+      </span>
+    )
+  }
+  const Icon = value ? Undo2 : PackageCheck
   return (
     <span className={`badge ${value ? 'rto' : 'delivered'}`}>
+      <Icon size={13} strokeWidth={2.25} aria-hidden="true" />
       {value ? 'came back' : 'delivered'}
     </span>
   )
@@ -57,14 +51,14 @@ export default function OrderQueue({ selectedId, onSelect, refreshToken }) {
   const shown = page ? page.items.length : 0
 
   return (
-    <div className="panel">
+    <div className="panel panel-divided">
       <h2>Order queue</h2>
       <p className="note">
         One row per order, showing where it stands now. Click any row for the
         full reasoning and its audit trail.
       </p>
 
-      <div className="filters">
+      <div className="filters-bar">
         <label>
           Action
           <select value={filters.action} onChange={(e) => update('action', e.target.value)}>
@@ -140,7 +134,13 @@ export default function OrderQueue({ selectedId, onSelect, refreshToken }) {
                     <td className="num">{row.score}</td>
                     <td className="num">{row.evidence_score}</td>
                     <td>{row.policy_tier.replace('_', ' ')}</td>
-                    <td><FinalAction row={row} /></td>
+                    <td>
+                      <FinalAction
+                        recommended={row.recommended_action}
+                        final={row.final_action}
+                        overridden={row.was_overridden}
+                      />
+                    </td>
                     <td><Outcome value={row.outcome} /></td>
                     <td>{row.decided_at.replace('T', ' ').slice(0, 16)}</td>
                   </tr>
