@@ -1,8 +1,13 @@
 # Steps 1-3 (rule engine, synthetic generator, latent outcome) are pure stdlib Python.
-# xgboost / shap / fastapi get added at the step that first needs them.
+# xgboost / shap get added at the step that first needs them.
 pytest==8.3.4
 
 # Step 4 (evaluation): average_precision_score for PR-AUC. Nothing else is used -
 # the confusion matrices and cost table are computed directly, so the numbers stay
 # readable and auditable rather than hidden behind a library call.
 scikit-learn==1.9.0
+
+# Step 7 (API): the four endpoints, plus httpx for FastAPI's TestClient.
+fastapi==0.141.1
+uvicorn==0.52.4
+httpx==0.28.1

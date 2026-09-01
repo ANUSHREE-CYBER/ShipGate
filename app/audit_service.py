@@ -33,6 +33,7 @@ what the rule actually used. That keeps the audit trail useful for answering
 the customer database.
 """
 
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime
 import json
@@ -119,6 +120,16 @@ BEGIN SELECT RAISE(ABORT, 'audit log is append-only: outcomes cannot be deleted'
 """
 
 
+class UnknownOrderError(ValueError):
+    """An override or outcome arrived for an order that was never scored.
+
+    A subclass of ValueError so existing callers that catch ValueError keep
+    working, but distinguishable so the API can answer 404 rather than 400 -
+    "I have never heard of this order" is a different problem from "your
+    request was malformed".
+    """
+
+
 @dataclass(frozen=True)
 class TimelineEvent:
     """One thing that happened to an order, for the audit view."""
@@ -138,6 +149,7 @@ class AuditLog:
 
     def __init__(self, path: str = DEFAULT_DB_PATH):
         self.path = path
+        self._in_batch = False
         self._conn = sqlite3.connect(path)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
@@ -153,6 +165,36 @@ class AuditLog:
 
     def close(self) -> None:
         self._conn.close()
+
+    @contextmanager
+    def batch(self):
+        """Group many appends into a single transaction.
+
+        Every record_* call normally commits on its own, which is right for an
+        API handling one order at a time - a decision is durable the moment it
+        is returned to the caller. It is badly wrong for a bulk load: committing
+        20,000 times means 20,000 fsyncs, and the 10,000-order backfill took 107
+        seconds. Inside this block it takes about two.
+
+        Nothing about the append-only guarantee changes - the triggers are
+        unaffected, and a failure rolls the whole batch back rather than leaving
+        the log half-written, which for an audit log is the behaviour you want.
+        """
+        if self._in_batch:
+            raise RuntimeError("already batching - nested batches are not supported")
+        self._in_batch = True
+        try:
+            yield self
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        finally:
+            self._in_batch = False
+
+    def _write(self):
+        """Commit per call, unless a batch is holding the transaction open."""
+        return nullcontext() if self._in_batch else self._conn
 
     def _create_schema(self) -> None:
         with self._conn:
@@ -185,7 +227,7 @@ class AuditLog:
         record = decision.to_dict()
         at = (decided_at or datetime.now()).isoformat(timespec="seconds")
 
-        with self._conn:
+        with self._write():
             cursor = self._conn.execute(
                 """INSERT INTO decisions (
                        order_id, merchant_id, decided_at, rule_version,
@@ -232,9 +274,9 @@ class AuditLog:
             "SELECT order_id FROM decisions WHERE decision_id = ?",
             (decision_id,)).fetchone()
         if row is None:
-            raise ValueError("no decision %r to override" % (decision_id,))
+            raise UnknownOrderError("no decision %r to override" % (decision_id,))
 
-        with self._conn:
+        with self._write():
             cursor = self._conn.execute(
                 """INSERT INTO overrides
                        (decision_id, order_id, overridden_at, action, actor, reason)
@@ -245,16 +287,36 @@ class AuditLog:
             )
             return cursor.lastrowid
 
+    def has_order(self, order_id: str) -> bool:
+        """Has this order ever been scored by ShipGate?"""
+        return self._conn.execute(
+            "SELECT 1 FROM decisions WHERE order_id = ? LIMIT 1",
+            (order_id,)).fetchone() is not None
+
     def record_outcome(self, order_id: str, is_rto: bool, source: str = "merchant",
-                       note: str = None, at: datetime = None) -> int:
+                       note: str = None, at: datetime = None,
+                       require_known_order: bool = True) -> int:
         """Append what actually happened to the parcel.
 
         A correction is a new row, never an edit. get_audit reports the latest
         as current and keeps the earlier ones visible.
+
+        By default an outcome for an order ShipGate never scored is refused.
+        There is no foreign key doing this, deliberately - the check is a
+        deliberate policy rather than a schema accident, and it can be waived by
+        a caller that genuinely wants to log an outcome for an unscored order
+        (a merchant back-loading history, say). But the default is strict,
+        because the far more likely cause of an unrecognised order id is a typo,
+        and a silent orphan row in an audit log is worse than an error.
         """
         if not (source or "").strip():
             raise ValueError("an outcome must record where it came from")
-        with self._conn:
+        if require_known_order and not self.has_order(order_id):
+            raise UnknownOrderError(
+                "no decision has ever been recorded for order %r, so there is "
+                "nothing for this outcome to attach to - check the order id"
+                % order_id)
+        with self._write():
             cursor = self._conn.execute(
                 """INSERT INTO outcomes (order_id, recorded_at, is_rto, source, note)
                    VALUES (?,?,?,?,?)""",
@@ -262,6 +324,23 @@ class AuditLog:
                  1 if is_rto else 0, source.strip(), note),
             )
             return cursor.lastrowid
+
+    def latest_decision_id(self, order_id: str) -> int:
+        """The decision an override should attach to: the most recent one.
+
+        Overrides are addressed by order in the API, because that is what a
+        merchant knows. Internally they attach to a specific decision, so that
+        overriding an order that is later re-scored does not silently carry the
+        override onto the new assessment.
+        """
+        row = self._conn.execute(
+            """SELECT decision_id FROM decisions WHERE order_id = ?
+               ORDER BY decision_id DESC LIMIT 1""", (order_id,)).fetchone()
+        if row is None:
+            raise UnknownOrderError(
+                "no decision has ever been recorded for order %r, so there is "
+                "nothing to override - check the order id" % order_id)
+        return row["decision_id"]
 
     # -- reading ----------------------------------------------------------
     def get_audit(self, order_id: str) -> dict:
@@ -382,7 +461,7 @@ if __name__ == "__main__":
         os.remove(DEFAULT_DB_PATH)
 
     records = load_dataset()
-    with AuditLog(DEFAULT_DB_PATH) as log:
+    with AuditLog(DEFAULT_DB_PATH) as log, log.batch():
         for record in records:
             decision = decide(assess(record.features), DEFAULT_POLICY, record.order_id)
             log.record_decision(decision, decided_at=record.timestamp)
