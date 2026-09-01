@@ -580,3 +580,144 @@ gain — but that rests entirely on the 3% abandonment assumption above. Decisio
 taken to leave the tier boundaries alone and revisit only if that assumption
 starts to look optimistic. Tuning rule boundaries against a metric derived from
 synthetic data is precisely what CLAUDE.md warns against.
+
+---
+
+## 2026-09-01 (Step 5) — the policy engine
+
+### Built
+
+**`app/policy_engine.py`** — maps a risk assessment to one of four actions under
+merchant-configurable policy, and produces the full decision record the audit
+trail needs.
+
+**`tests/test_policy_engine.py`** — 24 tests. Suite total is now 105.
+
+Small refactor to `app/rule_engine.py`: the safeguard block inside `assess()` was
+extracted into a public `apply_safeguards()`. Behaviour is unchanged and
+`RULE_VERSION` stays `1.0.0` — all 28 existing rule-engine tests pass untouched.
+`RiskAssessment` also gained an `order_id` field, because an assessment of an
+order should know which order it assessed.
+
+### Design — what a merchant may and may not configure
+
+The locked pitch says "merchant-configurable", so configurability is the point of
+this module rather than a nicety. The constraint that makes it safe:
+
+**May configure:** score boundaries (`thresholds`), a gentler action for any tier
+(`tier_actions`), and a ceiling on the harshest action they will take at all
+(`max_action`).
+
+**May not configure:** anything that reaches a harsh action the evidence does not
+support. The policy layer derives a tier from the merchant's own thresholds and
+then hands it to `rule_engine.apply_safeguards` — the identical function
+`assess()` uses.
+
+**There is no block action, and none can be configured.** `Action` is
+`ship < confirm < nudge < review` and nothing else. A merchant using ShipGate
+cannot refuse a customer outright through it. This is structural, not policy:
+Step 4 measured that blunt blocking is both disproportionate and economically
+worse (−₹236,500 against +₹15,748 on the same orders).
+
+Validation refuses incoherent configurations at construction: non-ascending
+thresholds, a mapping where a higher tier gets a gentler action than a lower one,
+a Low tier that does anything other than ship, or a missing tier.
+
+### Error found and fixed — the policy layer silently undid Safeguard 3
+
+**The tell:** the default policy produced 4,800 `ship` decisions where the rule
+engine had placed 4,804 orders in Low. A four-order discrepancy where there
+should have been none.
+
+**The cause:** `decide()` re-derived a tier from the merchant's thresholds and
+then re-applied *only the evidence gate*, reimplementing half of the engine's
+safeguards. The pincode safeguard was not reapplied, so four orders the engine
+had demoted via `pincode_not_pivotal` were escalated straight back up.
+
+Those four orders — ORD-007518, ORD-008448, ORD-008891, ORD-009879, all scoring
+31 with `evidence_score` 0 — are clean customers in high-RTO pincodes. The rule
+engine demoted them to "ship normally". The policy layer put them back to
+"confirm". **That is exactly the case Safeguard 3 was written for**, and exactly
+the case the Aug 31 hand-check singled out as the one that mattered
+("clean customer in a bad-delivery pincode → knocked back down to ship normally").
+
+**The fix:** stop duplicating. `apply_safeguards()` now lives in `rule_engine`
+and both `assess()` and `decide()` call it. It takes a `tier_fn` so the policy
+layer asks "would removing D2 lower the tier?" against the *merchant's*
+boundaries rather than the default ones. Two copies of a safeguard means one of
+them is out of date; now there is only one.
+
+**Why this was fixed and reported rather than escalated mid-step:** it changed
+nothing about the design and contradicted no decision — the safeguard was
+correct, my implementation of the new layer failed to honour it. Nothing ShipGate
+claims had to change. Had the safeguard itself turned out to be unworkable, that
+would have been a stop.
+
+**Pinned:** `test_pincode_safeguard_survives_the_policy_layer` uses a
+purpose-built order (P1 +25 and D2 +6 = 31, one band above the 25 it would score
+without the pincode points) and asserts it still ships.
+`test_default_policy_reproduces_the_engine_tier_exactly` walks all 10,000 orders
+and asserts the two layers never disagree.
+
+### Verified — configuration cannot escape the safeguards
+
+Action mix across all 10,000 orders under three policies:
+
+| Policy | ship | confirm | nudge | review | Safeguard demotions |
+|---|---|---|---|---|---|
+| default (31/61/86) | 4,804 (48.0%) | 4,711 (47.1%) | 434 (4.3%) | 51 (0.5%) | 154 |
+| gentle (41/71/91, capped at nudge) | 6,805 (68.0%) | 3,173 (31.7%) | 22 (0.2%) | 0 | 19 |
+| strict (21/51/76) | 3,601 (36.0%) | 5,526 (55.3%) | 757 (7.6%) | 116 (1.2%) | 746 |
+
+Default reproduces the engine's tier distribution exactly (4,804 / 4,711 / 434 /
+51), and its 154 demotions are the 150 evidence-gate plus 4 pincode cases already
+recorded in Finding 7. That equality is now a test.
+
+**The strict row is the interesting one for the demo.** A merchant who drops
+every boundary gets stopped **746 times** from reaching a harsher action than the
+evidence supports. Being merchant-configurable does not mean the safeguards are
+optional, and that number demonstrates it rather than asserting it.
+
+### Hand-checked decisions
+
+| Order | Score | Evidence | Engine tier | default | gentle | strict |
+|---|---|---|---|---|---|---|
+| Clean prepaid regular, ₹800 books | 0 | 0 | low | ship | ship | ship |
+| Repeat refuser, COD ₹3,500 apparel | 85 | 40 | high | nudge | confirm | review |
+| Clean customer, bad pincode, COD ₹1,500 | 31 | 0 | low | ship | ship | **confirm** |
+| Stranger, COD ₹12,000 apparel, 2 variants | 68 | 0 | medium | confirm | confirm | confirm |
+
+Row 3 is worth understanding rather than treating as a bug. Under `strict`
+(medium starts at 21), the order scores 31 *and would still score 25 without the
+pincode points* — 25 is above 21, so it lands in Medium either way. D2 is
+genuinely not the pivotal rule under those boundaries, so the safeguard correctly
+does not fire. The safeguard asks "did this rule change the outcome?", and the
+answer depends on where the merchant put their boundaries. That is the right
+behaviour and it is why `apply_safeguards` takes a `tier_fn`.
+
+Row 4 continues to hold the Aug 31 line: a ₹12,000 order from a total stranger
+gets a confirmation step and nothing harsher, under every policy including the
+strictest, because order value is not evidence.
+
+### Overrides
+
+`apply_override` requires an action, a reason of at least 10 characters, and an
+actor, and raises otherwise. It returns a new decision rather than mutating —
+`recommended_action` is never erased, so the audit trail always shows both what
+the system recommended and what the human did instead. `final_action` resolves to
+the override when there is one.
+
+The 10-character minimum is a judgement call: long enough that "ok" and "fine"
+fail, short enough not to be obstructive. It is a nudge toward a real reason, not
+a guarantee of one — nothing can stop someone typing "aaaaaaaaaa".
+
+### Not certain about
+
+- **The `max_action` cap interacts oddly with `tier_actions`.** Under `gentle`,
+  Very High maps to nudge and `max_action` is also nudge, so the cap never
+  actually binds and `capped_at_` never appears in that policy's audit records.
+  The cap is exercised by tests but not by any preset. Harmless, slightly
+  redundant, worth revisiting only if the dashboard wants to display it.
+- **`reasons` are generated strings, not structured data.** Good for the decision
+  drawer and the audit log, awkward if the dashboard later wants to render each
+  reason as its own component. Deferred until Step 8 shows what it needs.
