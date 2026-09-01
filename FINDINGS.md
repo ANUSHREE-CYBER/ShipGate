@@ -1200,3 +1200,118 @@ The synthetic-data disclaimer sits permanently below the masthead on every view.
 - **The queue's default sort is by score**, so the demo opens on the very-high
   tier. Good for showing the product; it does mean the first screen is not
   representative of a typical order.
+
+---
+
+## 2026-09-02 (Step 9) — README and one-command setup
+
+### Built
+
+**`README.md`** — the public document, built entirely from measurements recorded
+in this file. Nothing is claimed in it that is not traceable to a number here.
+
+**`app/bootstrap.py`** — one command that builds every artifact and serves the
+demo.
+
+**`tests/test_bootstrap.py`** — 5 tests. Suite total is now 193.
+
+### Why bootstrap.py was added despite the scope freeze
+
+CLAUDE.md's README skeleton asks for "[One-command run instructions]". Setup was
+four separate module invocations in a dependency order a reader would have to
+infer. Writing that honestly in the README would have meant either four commands
+or a shell one-liner that hides the ordering.
+
+`python -m app.bootstrap --serve` runs generator → latent outcomes → scoring into
+the audit log → evaluation, then starts the API with the dashboard attached.
+**1.3–4.9 seconds from a clean slate.** It reuses existing CSVs unless `--force`
+is passed, and it prints what it built.
+
+Judged worth the file rather than scope creep: it serves a stated brief
+requirement, adds no product behaviour, and directly improves the thing a judge
+experiences first. Its docstring says plainly that it is a demo bootstrapper and
+not a migration tool — it deletes and rebuilds the audit database every run,
+which is right for a demo and would be catastrophic in production.
+
+### Verified against the README's own instructions
+
+Deleted `orders.csv`, `outcomes.csv` and `audit.db`, then ran exactly what the
+README tells a reader to run:
+
+```
+[1/4] generating 10000 synthetic orders
+[2/4] deciding outcomes with independent latent logic
+[3/4] scoring every order and writing the audit log
+[4/4] evaluating on the held-out later 30% and emitting cost data
+built in 4.9s
+
+dashboard: http://127.0.0.1:8080/     -> 200
+api docs:  http://127.0.0.1:8080/docs -> 200
+/orders                                -> 200
+/evaluation.json                       -> 200
+```
+
+`test_forcing_regenerates_identical_data` asserts a forced rebuild is byte-for-byte
+identical, so the seeds hold.
+
+### Compliance checks run against the README, not assumed
+
+CLAUDE.md carries a list of claims that must never appear and wording that must
+appear verbatim. Both were checked mechanically rather than by rereading:
+
+| Check | Result |
+|---|---|
+| "only blocks" / "fraudster" / "better than Razorpay" / "replace" / "proves real-world" | none present |
+| Limitations paragraph, verbatim from CLAUDE.md | present, whitespace-normalised match |
+| Locked pitch, verbatim | present |
+| "Synthetic simulation result — validates policy logic, not production accuracy." | present, three times |
+
+The README instead says Razorpay's COD Intelligence "already offers confirmation,
+address-correction and prepaid-incentive flows for medium-risk orders" and that
+ShipGate "does not compete with that detection. It complements it."
+
+### Error found and fixed — an unverified number in my own draft
+
+The draft claimed *"a ₹12,000 COD order from a complete stranger scores 68"*.
+Checking it: 68 requires `variant_count = 2`. The base case — one variant,
+complete address, new customer — is **60** (P1 25 + P2 20 + H4 5 + C1 10).
+
+The 68 came from a hand-check earlier in the project that happened to use two
+variants, and the Aug 31 Obsidian entry quotes 72 for a third variation. Three
+different numbers for "the same" illustrative order, none of them wrong in
+context, all of them wrong to state without their assumptions.
+
+Corrected to 60 with the assumptions implied by the base case. **This is the
+exact failure mode this file exists to prevent** — a number remembered from a
+previous session, restated in a public document, drifting from anything anyone
+actually measured. Every other figure in the README was pulled from
+`evaluation.json` or re-measured today.
+
+### What the README leads with
+
+- The locked pitch, verbatim, as the first line.
+- A synthetic-data warning above the fold, before any number appears.
+- The ₹252,248 graduated-versus-blunt comparison as the central cost result.
+- The 1.04× new-customer figure and the sentence "the rules are close to useless
+  on a first-time customer", in the Evaluation section rather than buried in
+  Limitations.
+- The 6.6% confirmation-abandonment break point, with the observation that
+  confirmation carries 1,409 of 1,610 interventions so most of the ₹15,748 rests
+  on that one assumption.
+- "There is no authentication" as the first bullet of Limitations.
+
+### Not certain about
+
+- **The README is long.** Thorough for a judge who reads it properly; possibly
+  too long for one skimming a submission list. The pitch, the warning and the
+  problem statement are all above the fold, so a skim still lands on the right
+  things, but a shorter version might land better. Worth a second opinion.
+- **`frontend/dist` being committed will look odd to some reviewers.** It is
+  stated and justified in the README, but a reviewer who dislikes committed build
+  artifacts may mark it down regardless. The alternative — requiring Node — costs
+  more than it saves for a three-day demo.
+- **`evaluation.json` can still go stale silently.** Flagged in Step 8, still
+  true: `bootstrap.py` regenerates it every run, which makes the common path
+  safe, but nothing detects a hand-edited rule set with a stale JSON alongside.
+- **The demo video is not recorded**, and the README references figures the video
+  will need to match. If any number changes, both need updating together.
