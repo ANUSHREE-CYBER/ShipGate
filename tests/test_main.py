@@ -236,11 +236,16 @@ def test_audit_returns_the_full_timeline_in_order(client):
 # --------------------------------------------------------------------------
 # Shape of the API itself
 # --------------------------------------------------------------------------
-def test_only_the_four_endpoints_exist(client):
-    """CLAUDE.md says four endpoints. Scope freeze is a rule, so it is a test."""
+def test_only_the_five_endpoints_exist(client):
+    """Scope freeze is a working rule, so it is enforced by a test.
+
+    GET /orders was added deliberately in Step 8 and CLAUDE.md updated to match;
+    the list is frozen again at these five. Anything new has to be argued for.
+    """
     paths = {r.path for r in main.app.routes if r.path.startswith(("/risk", "/orders"))}
     assert paths == {
         "/risk/assess",
+        "/orders",
         "/orders/{order_id}/outcome",
         "/orders/{order_id}/override",
         "/orders/{order_id}/audit",
@@ -249,3 +254,69 @@ def test_only_the_four_endpoints_exist(client):
 
 def test_openapi_schema_builds(client):
     assert client.get("/openapi.json").status_code == 200
+
+
+# --------------------------------------------------------------------------
+# GET /orders - the queue
+# --------------------------------------------------------------------------
+def test_queue_lists_scored_orders_newest_state_first(client):
+    client.post("/risk/assess", json=REFUSER)
+    client.post("/risk/assess", json=CLEAN)
+
+    page = client.get("/orders").json()
+    assert page["total"] == 2
+    assert {i["order_id"] for i in page["items"]} == {"ORD-001", "ORD-002"}
+    assert page["items"][0]["score"] >= page["items"][1]["score"], "default sort is by score"
+
+
+def test_queue_shows_one_row_per_order_even_after_rescoring(client):
+    client.post("/risk/assess", json=REFUSER)
+    client.post("/risk/assess", json=REFUSER)
+    page = client.get("/orders").json()
+    assert page["total"] == 1
+    assert page["items"][0]["order_id"] == "ORD-001"
+
+
+def test_queue_filters_by_action(client):
+    client.post("/risk/assess", json=REFUSER)
+    client.post("/risk/assess", json=CLEAN)
+    assert client.get("/orders?action=nudge").json()["total"] == 1
+    assert client.get("/orders?action=review").json()["total"] == 0
+
+
+def test_queue_filters_by_outcome_state(client):
+    client.post("/risk/assess", json=REFUSER)
+    client.post("/risk/assess", json=CLEAN)
+    client.post("/orders/ORD-001/outcome", json={"is_rto": True, "source": "courier"})
+
+    assert client.get("/orders?outcome=rto").json()["total"] == 1
+    assert client.get("/orders?outcome=pending").json()["total"] == 1
+    assert client.get("/orders?outcome=delivered").json()["total"] == 0
+
+
+def test_queue_shows_overrides(client):
+    client.post("/risk/assess", json=REFUSER)
+    client.post("/orders/ORD-001/override",
+                json={"action": "ship", "reason": GOOD_REASON, "actor": "anushree"})
+
+    row = client.get("/orders?overridden=true").json()["items"][0]
+    assert row["was_overridden"] is True
+    assert row["recommended_action"] == "nudge"
+    assert row["final_action"] == "ship"
+    assert row["override_actor"] == "anushree"
+    assert client.get("/orders?overridden=false").json()["total"] == 0
+
+
+def test_queue_paginates_honestly(client):
+    for i in range(5):
+        client.post("/risk/assess", json=dict(REFUSER, order_id="ORD-%03d" % i))
+    page = client.get("/orders?limit=2&offset=2").json()
+    assert page["total"] == 5, "total is the whole set, not the page"
+    assert len(page["items"]) == 2
+    assert page["offset"] == 2
+
+
+@pytest.mark.parametrize("query", ["action=block", "tier=extreme", "outcome=maybe",
+                                   "sort=random", "limit=0", "limit=9999", "offset=-1"])
+def test_queue_rejects_nonsense_filters(client, query):
+    assert client.get("/orders?" + query).status_code == 422
