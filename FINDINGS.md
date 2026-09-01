@@ -259,13 +259,133 @@ widening the window, lowering the threshold, or documenting it as untested. Bein
 explicit about this is better than a reviewer noticing a rule tier that never
 appears in any output.
 
-### Carried into Step 4
+---
 
-- Chronological replay attaching `completed_orders` / `returned_orders` /
-  `refusals_in_last_3` and pincode statistics per order, computed strictly from
-  events before each timestamp. This is where leakage would enter if anywhere.
+## 2026-09-01 (later) — Step 4 groundwork: chronological feature replay
+
+### Built
+
+**`app/feature_normalizer.py`** — turns the two CSVs into scoreable
+`OrderFeatures`, attaching the five history-derived fields the rule engine needs
+(`completed_orders`, `returned_orders`, `refusals_in_last_3`,
+`pincode_total_orders`, `pincode_rto_count`) plus a running merchant baseline.
+
+**`tests/test_feature_normalizer.py`** — 14 tests, all leakage-focused. Suite
+total is now 58.
+
+Two design decisions worth recording:
+
+**A resolution lag, not just timestamp ordering.** The brief says use only events
+before an order's timestamp. That is necessary but not sufficient. A customer
+ordering on Jun-10 and again on Jun-14 has the Jun-10 parcel *still in transit*
+at the second checkout — nobody knows yet whether it will be refused. Counting it
+uses information that did not exist at decision time. This is routine rather than
+rare here: frequent buyers order every ~5.6 days and Indian COD delivery takes
+3–7 days. `DEFAULT_RESOLUTION_LAG_DAYS = 5`, exposed as a parameter so the naive
+behaviour stays measurable.
+
+**`failure_mode` is dropped at the loader boundary.** `load_outcomes_csv` reads
+the column and discards it, returning `order_id -> is_rto` only. Whether a
+failure was a refusal or a delivery failure is after-the-fact knowledge. Making
+it structurally unreachable is stronger than a comment asking people not to use it.
+
+### Error found and fixed — an order could see its own outcome
+
+**The tell:** first run printed *100% known customers at lag=0*. That is
+impossible. A customer's first-ever order has no resolved history by definition,
+so the true figure can never reach 100%.
+
+**The cause:** the resolution loop folded in completed orders with `<=`:
+
+```
+while cursor < len(resolving) and resolving[cursor][0] <= now:
+```
+
+At `lag=0` an order's resolution time equals its own timestamp, so the loop
+folded the order into the running state *before* building that same order's
+feature row. Every order was scored with its own outcome already counted in its
+history.
+
+**The fix:** a strict `<`. Any strictly-earlier resolution is known; an order's
+own resolution never is.
+
+**Why this one matters more than the others.** It does not crash, raise, or
+produce an obviously wrong number. It silently inflates every downstream metric —
+precision, recall, PR-AUC, the entire cost table. Had it survived to the demo we
+would have reported flattering numbers with no idea they were wrong. This is
+exactly the failure mode CLAUDE.md's "suspiciously perfect metrics are a signal
+to check for leakage" rule exists to catch, and the catch came from a sanity
+check on a percentage rather than from any test.
+
+**Pinned:** `test_no_order_sees_its_own_outcome` runs at lags 0, 1, 5 and 30 and
+asserts every customer's first-ever order shows zero completed orders, zero
+returns, zero recent refusals. A second test,
+`test_history_matches_an_independent_replay`, recomputes history for the five
+busiest customers by brute force and demands identical counts.
+
+### Finding 6 — the resolution lag is cheap insurance, not a large correction
+
+| Lag | Known customers | Orders with a recent refusal | Mean baseline |
+|---|---|---|---|
+| 5 days | 4,820 (48.2%) | 1,420 | 0.187 |
+| 0 days | 4,933 (49.3%) | 1,456 | 0.185 |
+
+A 1.1-point difference. Most customers order infrequently enough that their
+previous parcel has already landed, so the in-transit overlap affects only the
+frequent-buyer tail. Worth keeping — it costs nothing, it is the honest model,
+and it removes an objection a reviewer could otherwise raise — but it is not
+doing heavy lifting, and the headline metrics would not move much without it.
+
+(Both figures are post-fix. Pre-fix, lag=0 reported 100% known customers, which
+was the bug rather than a measurement.)
+
+### Finding 7 — the rules separate risk cleanly on independent data
+
+Smoke test only: whole dataset, no train/test split, no thresholds tuned. The
+rule engine scored the replayed features and the tiers were compared against the
+independently generated outcomes.
+
+| Tier | Orders | Share | Actual RTO rate |
+|---|---|---|---|
+| Low | 4,804 | 48.0% | **7.2%** |
+| Medium | 4,711 | 47.1% | **27.8%** |
+| High | 434 | 4.3% | **49.1%** |
+| Very high | 51 | 0.5% | **70.6%** |
+
+Monotone across all four tiers with a roughly ten-fold spread from Low to Very
+High. This is the first evidence that the hand-designed point weights carry real
+signal, and it is earned rather than circular: the outcomes came from a separate
+module with different coefficients, hidden factors, and its own RNG seed, and
+the features contain no information from after each order's timestamp.
+
+Supporting numbers: scores span 0–107, median 35. Evidence is present on 16.2% of
+orders. Safeguards fired 150 times for `insufficient_evidence_for_high` and 4
+times for `pincode_not_pivotal` — both live, neither decorative.
+
+**The tension to watch:** Medium holds 47.1% of all orders, and that population
+delivers fine 72.2% of the time. Every one of those is a confirmation step
+applied to a mostly-good customer. Whether that trade is worth it is precisely
+what the cost table has to answer, and it is likely to be the most interesting
+result of Step 4 rather than the headline PR-AUC.
+
+**Caveat:** this is the full dataset, not a held-out test set, so it is a shape
+check and not a result. Nothing from this table goes in the README until it has
+been recomputed on the later 30% only.
+
+### Carried into `evaluation.py`
+
+- 70/30 split by timestamp. All reported metrics from the later 30% only; the
+  earlier 70% is for threshold selection and tomorrow's calibration layer.
+- PR-AUC on the raw score, precision/recall/confusion matrix at each tier
+  boundary, broken down by new-vs-known customer and by merchant cohort.
+- Cost table at TP +₹200 / FP −₹300 / FN −₹200 / TN +₹300, with conservative /
+  balanced / aggressive policies side by side.
+- A "flag every COD order" reference row. Without a baseline a PR-AUC number has
+  nothing to be judged against, and given COD is 55.6% of orders and fails at
+  30.4%, that baseline is not weak.
 - Expect C2 to show marginal predictive power that vanishes under stratification —
   report it that way, do not let it inflate a headline metric.
 - Suspiciously strong metrics are a signal to hunt for leakage, not to celebrate.
   With `RELIABILITY_COEF = 0.85` of unobservable per-customer variance plus
-  courier and weather noise, a high PR-AUC would be evidence of a bug.
+  courier and weather noise, a high PR-AUC would be evidence of a bug. The lag=0
+  incident above is the precedent.
