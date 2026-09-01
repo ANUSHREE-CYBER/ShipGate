@@ -127,6 +127,7 @@ class RuleHit:
 
 @dataclass
 class RiskAssessment:
+    order_id: str
     rule_version: str
     raw_score: int                  # sum of group subtotals BEFORE caps
     score: int                      # sum AFTER per-group caps
@@ -139,6 +140,7 @@ class RiskAssessment:
 
     def to_dict(self) -> dict:
         return {
+            "order_id": self.order_id,
             "rule_version": self.rule_version,
             "raw_score": self.raw_score,
             "score": self.score,
@@ -342,6 +344,56 @@ def _clamp(value: int, cap: int) -> int:
     return max(0, min(value, cap))
 
 
+def apply_safeguards(tier: Tier, score: int, evidence_score: int,
+                     fired_rules: list, tier_fn=None) -> tuple:
+    """Demote a tier that the evidence does not support. Returns (tier, applied).
+
+    Lives here, and is called by BOTH assess() and policy_engine.decide(),
+    because the policy layer derives its own tier from merchant-configurable
+    thresholds and must not be allowed to arrive at a harsher tier than the
+    evidence permits.
+
+    Sharing one implementation is not tidiness, it is the safeguard. The first
+    version of the policy engine re-applied only the evidence gate and silently
+    undid safeguard 3, escalating four clean customers in high-RTO pincodes from
+    "ship normally" back to "confirm". Two copies of a safeguard means one of
+    them is out of date; this way there is only ever one.
+
+    tier_fn maps a score to a tier and defaults to the standard boundaries. The
+    policy engine passes its own so that "would removing D2 lower the tier?" is
+    asked against the merchant's boundaries rather than the default ones.
+    """
+    if tier_fn is None:
+        tier_fn = tier_from_score
+    applied = []
+
+    # Safeguard 3: pincode risk alone can never force a restrictive action. It
+    # may contribute alongside a real address defect or refusal history, but it
+    # can never be the single rule that pushes an order into a harsher tier.
+    deliverability_subtotal = sum(h.points for h in fired_rules
+                                  if h.group == "deliverability")
+    pincode_points = sum(h.points for h in fired_rules if h.id == "D2")
+    if pincode_points:
+        tier_without = tier_fn(score - pincode_points)
+        if (tier > tier_without
+                and pincode_points == deliverability_subtotal
+                and evidence_score == 0):
+            tier = tier_without
+            applied.append("pincode_not_pivotal")
+
+    # Safeguard 1: weak contextual signals alone can never reach High or Very
+    # High. The score is reported honestly and left untouched - only the tier is
+    # demoted, and the demotion is recorded for the audit trail.
+    if tier >= Tier.VERY_HIGH and evidence_score < MIN_EVIDENCE_FOR_VERY_HIGH:
+        tier = Tier.HIGH
+        applied.append("insufficient_evidence_for_very_high")
+    if tier >= Tier.HIGH and evidence_score < MIN_EVIDENCE_FOR_HIGH:
+        tier = Tier.MEDIUM
+        applied.append("insufficient_evidence_for_high")
+
+    return tier, applied
+
+
 def assess(f: OrderFeatures) -> RiskAssessment:
     groups = {
         "payment": _payment_rules(f),
@@ -370,33 +422,11 @@ def assess(f: OrderFeatures) -> RiskAssessment:
         "deliverability subtotal was modified outside its own group"
     )
 
-    tier = tier_from_score(score)
-    tier_before = tier
-    safeguards = []
-
-    # Safeguard 3: pincode risk alone can never force a restrictive action. It
-    # may contribute alongside a real address defect or refusal history, but it
-    # can never be the single rule that pushes an order into a harsher tier.
-    pincode_points = sum(h.points for h in groups["deliverability"] if h.id == "D2")
-    if pincode_points:
-        tier_without = tier_from_score(score - pincode_points)
-        if (tier > tier_without
-                and pincode_points == deliverability_subtotal
-                and evidence_score == 0):
-            tier = tier_without
-            safeguards.append("pincode_not_pivotal")
-
-    # Safeguard 1: weak contextual signals alone can never reach High or Very
-    # High. The score is reported honestly and left untouched - only the tier is
-    # demoted, and the demotion is recorded for the audit trail.
-    if tier >= Tier.VERY_HIGH and evidence_score < MIN_EVIDENCE_FOR_VERY_HIGH:
-        tier = Tier.HIGH
-        safeguards.append("insufficient_evidence_for_very_high")
-    if tier >= Tier.HIGH and evidence_score < MIN_EVIDENCE_FOR_HIGH:
-        tier = Tier.MEDIUM
-        safeguards.append("insufficient_evidence_for_high")
+    tier_before = tier_from_score(score)
+    tier, safeguards = apply_safeguards(tier_before, score, evidence_score, fired)
 
     return RiskAssessment(
+        order_id=f.order_id,
         rule_version=RULE_VERSION,
         raw_score=raw_score,
         score=score,
