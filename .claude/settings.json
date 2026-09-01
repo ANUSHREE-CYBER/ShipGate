@@ -8,18 +8,15 @@
       "Bash(py *)",
       "PowerShell(./venv/Scripts/python.exe *)",
       "PowerShell(python *)",
-
       "Bash(./venv/Scripts/pytest.exe *)",
       "Bash(pytest *)",
       "Bash(pytest)",
       "PowerShell(pytest *)",
-
       "Bash(./venv/Scripts/python.exe -m pip *)",
       "Bash(pip install *)",
       "Bash(pip list)",
       "Bash(pip freeze)",
       "Bash(pip show *)",
-
       "Bash(git status)",
       "Bash(git status *)",
       "Bash(git log *)",
@@ -32,7 +29,9 @@
       "Bash(git branch --list *)",
       "Bash(git rev-parse *)",
       "Bash(git ls-files *)",
-      "Bash(git remote -v)"
+      "Bash(git remote -v)",
+      "Bash(./venv/Scripts/python.exe -c ' *)",
+      "Bash(time ./venv/Scripts/python.exe -m app.bootstrap)"
     ],
     "ask": [
       "Bash(git push *)",
