@@ -242,10 +242,13 @@ Do not skip ahead. Each step gets manually verified (a hand-picked clean order, 
 
 ```
 POST /risk/assess          → score an order, return tier + action + reasons
+GET  /orders               → the order queue: latest state per order, filtered and paginated
 POST /orders/{id}/outcome  → record whether it actually became an RTO
 POST /orders/{id}/override → merchant override, requires a reason
 GET  /orders/{id}/audit    → full audit trail for one order
 ```
+
+`GET /orders` was added on Sep 1 during Step 8. The original list of four was a deliberate scope freeze, but the dashboard's order queue cannot exist without a way to list orders — every other endpoint requires an order id you already have. It is read-only over data the other endpoints already produce and adds no new behaviour. Flagged and agreed before building rather than added quietly. **The list is frozen again at these five.**
 
 ---
 

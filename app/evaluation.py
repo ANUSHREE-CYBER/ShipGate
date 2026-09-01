@@ -58,6 +58,7 @@ itself so the fragility of the conclusion is visible rather than buried.
 """
 
 from dataclasses import dataclass
+import pathlib
 
 from sklearn.metrics import average_precision_score
 
@@ -521,5 +522,138 @@ def report(orders_path: str = "data/orders.csv",
     print(_rule())
 
 
+def report_data(orders_path: str = "data/orders.csv",
+                outcomes_path: str = "data/outcomes.csv") -> dict:
+    """The same numbers report() prints, as JSON for the dashboard.
+
+    Emitted as a static file rather than an endpoint on purpose. These come from
+    a batch evaluation over a held-out time slice; recomputing them per request
+    would be both slow and wrong, because the split is a property of the whole
+    dataset rather than of any one order.
+    """
+    records = load_dataset(orders_path, outcomes_path)
+    train_records, test_records = split_chronological(records)
+    train, test = score_records(train_records), score_records(test_records)
+    cod_test = [s for s in test if s.is_cod]
+    chosen, _ = best_threshold_by_value(train)
+
+    def confusion_dict(label, c):
+        return {"policy": label, "tp": c.tp, "fp": c.fp, "fn": c.fn, "tn": c.tn,
+                "flagged": c.flagged, "precision": round(c.precision, 4),
+                "recall": round(c.recall, 4), "f1": round(c.f1, 4),
+                "net_value": round(c.net_value, 2)}
+
+    ship_all, _ = policy_value(test, lambda s: "ship")
+    shipgate, load = policy_value(test, shipgate_action_for)
+    confirm_all, _ = policy_value(test, lambda s: "confirm")
+    block_tiers, _ = policy_value(
+        test, lambda s: "block" if s.tier is not Tier.LOW else "ship")
+    block_vh, _ = policy_value(
+        test, lambda s: "block" if s.tier is Tier.VERY_HIGH else "ship")
+
+    tier_rate = {}
+    for tier, name in TIER_ACTIONS.items():
+        subset = [s for s in test if s.tier is tier]
+        tier_rate[name] = round(prevalence(subset), 4) if subset else None
+
+    return {
+        "evaluation_version": EVALUATION_VERSION,
+        "disclaimer": CAVEAT,
+        "split": {
+            "train_orders": len(train),
+            "test_orders": len(test),
+            "train_from": str(train_records[0].timestamp.date()),
+            "train_to": str(train_records[-1].timestamp.date()),
+            "test_from": str(test_records[0].timestamp.date()),
+            "test_to": str(test_records[-1].timestamp.date()),
+        },
+        "ranking": {
+            "cod_only": {"pr_auc": round(pr_auc(cod_test), 4),
+                         "baseline": round(prevalence(cod_test), 4),
+                         "n": len(cod_test)},
+            "all_orders": {"pr_auc": round(pr_auc(test), 4),
+                           "baseline": round(prevalence(test), 4),
+                           "n": len(test)},
+        },
+        "operating_points": [confusion_dict(label, confusion_at(cod_test, t))
+                             for label, t in TIER_THRESHOLDS],
+        "segments": [
+            {"segment": label, "n": len(subset),
+             "rto_rate": round(prevalence(subset), 4),
+             "pr_auc": round(pr_auc(subset), 4)}
+            for label, subset in (
+                ("new customer", [s for s in cod_test if not s.is_known_customer]),
+                ("known customer", [s for s in cod_test if s.is_known_customer]),
+                ("gemstone", [s for s in cod_test if s.merchant_cohort == "gemstone"]),
+                ("fast_fashion", [s for s in cod_test
+                                  if s.merchant_cohort == "fast_fashion"]),
+            ) if subset
+        ],
+        "blunt_cost_table": {
+            "break_even_p": round(BREAK_EVEN_P, 4),
+            "note": ("Prices every intervention as a customer lost at full "
+                     "margin, which is the cost of a hard block."),
+            "policies": [
+                confusion_dict("conservative: score >= 61", confusion_at(test, 61)),
+                confusion_dict("balanced: score >= 31", confusion_at(test, 31)),
+                confusion_dict("aggressive: score >= 21", confusion_at(test, 21)),
+                confusion_dict("value-optimal on train: >= %d" % chosen,
+                               confusion_at(test, chosen)),
+                confusion_dict("reference: flag nothing", confusion_at(test, 10_000)),
+                confusion_dict("reference: flag everything", confusion_at(test, 0)),
+                confusion_dict("reference: flag every COD order",
+                               confusion_for_predicate(test, lambda s: s.is_cod)),
+            ],
+        },
+        "graduated_actions": [
+            {"action": name, "label": ACTIONS[name].label,
+             "prevent_rate": ACTIONS[name].prevent_rate,
+             "abandon_rate": ACTIONS[name].abandon_rate,
+             "op_cost": ACTIONS[name].op_cost,
+             "break_even_p": (None if ACTIONS[name].break_even_p == float("inf")
+                              else round(ACTIONS[name].break_even_p, 4)),
+             "tier_rto_rate": tier_rate.get(name)}
+            for name in ("ship", "confirm", "nudge", "review", "block")
+        ],
+        "graduated_policies": [
+            {"policy": "ship everything (do nothing)", "net_value": round(ship_all, 2),
+             "vs_ship_all": 0.0},
+            {"policy": "ShipGate graduated tiers", "net_value": round(shipgate, 2),
+             "vs_ship_all": round(shipgate - ship_all, 2)},
+            {"policy": "confirm every order", "net_value": round(confirm_all, 2),
+             "vs_ship_all": round(confirm_all - ship_all, 2)},
+            {"policy": "hard block everything above Low",
+             "net_value": round(block_tiers, 2),
+             "vs_ship_all": round(block_tiers - ship_all, 2)},
+            {"policy": "hard block Very High only", "net_value": round(block_vh, 2),
+             "vs_ship_all": round(block_vh - ship_all, 2)},
+        ],
+        "operational_load": load,
+        "assumption_sensitivity": [
+            {"action": ACTIONS[name].label,
+             "assumed_abandon_rate": ACTIONS[name].abandon_rate,
+             "stops_paying_above": round(
+                 (tier_rate[name] * ACTIONS[name].prevent_rate * -RTO_FREIGHT_COST
+                  - ACTIONS[name].op_cost) / (ORDER_MARGIN * (1 - tier_rate[name])), 4)}
+            for name in ("confirm", "nudge", "review") if tier_rate.get(name)
+        ],
+    }
+
+
 if __name__ == "__main__":
+    import argparse
+    import json
+
+    parser = argparse.ArgumentParser(description="ShipGate evaluation")
+    parser.add_argument("--json", metavar="PATH", nargs="?",
+                        const="frontend/public/evaluation.json",
+                        help="also write the numbers as JSON for the dashboard")
+    args = parser.parse_args()
+
     report()
+    if args.json:
+        path = pathlib.Path(args.json)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(report_data(), indent=2), encoding="utf-8")
+        print()
+        print("wrote %s for the dashboard cost view" % path)

@@ -1,9 +1,17 @@
-"""FastAPI wrapper - the four endpoints, and nothing else.
+"""FastAPI wrapper - the five endpoints, and nothing else.
 
     POST /risk/assess          score an order, return tier + action + reasons
+    GET  /orders                the order queue, filtered and paginated
     POST /orders/{id}/outcome  record whether it actually became an RTO
     POST /orders/{id}/override merchant override, requires a reason
     GET  /orders/{id}/audit    full audit trail for one order
+
+GET /orders was added in Step 8. CLAUDE.md originally froze the API at four
+endpoints, but the dashboard's order queue cannot exist without a way to list
+orders - every other endpoint needs an order id you already know. It is a
+read-only listing over data the other endpoints already produce, adds no new
+behaviour, and CLAUDE.md's endpoint list was updated to match rather than left
+to drift.
 
 WHAT THIS SERVICE DOES NOT OWN
 ------------------------------
@@ -32,8 +40,11 @@ it can be trusted.
 
 from contextlib import asynccontextmanager
 from datetime import datetime
+import pathlib
 
-from fastapi import Depends, FastAPI, HTTPException, Path
+from fastapi import Depends, FastAPI, HTTPException, Path, Query
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.audit_service import DEFAULT_DB_PATH, AuditLog, UnknownOrderError
@@ -186,6 +197,33 @@ def assess_order(request: AssessRequest, log: AuditLog = Depends(get_log)) -> di
     return record
 
 
+@app.get("/orders", tags=["decisions"])
+def list_orders(
+    action: str = Query(None, pattern="^(ship|confirm|nudge|review)$"),
+    tier: str = Query(None, pattern="^(low|medium|high|very_high)$"),
+    outcome: str = Query(None, pattern="^(rto|delivered|pending)$"),
+    overridden: bool = Query(None),
+    sort: str = Query("score", pattern="^(score|recent)$"),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    log: AuditLog = Depends(get_log),
+) -> dict:
+    """The order queue: latest state of each order, filtered and paginated.
+
+    One row per order, showing its most recent decision - the queue answers
+    "where does this order stand now". The full history is one call away at
+    /orders/{id}/audit.
+    """
+    try:
+        page = log.list_orders(action=action, tier=tier, outcome=outcome,
+                               overridden=overridden, sort=sort,
+                               limit=limit, offset=offset)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    page["api_version"] = API_VERSION
+    return page
+
+
 @app.post("/orders/{order_id}/outcome", tags=["outcomes"])
 def record_outcome(request: OutcomeRequest,
                    order_id: str = Path(..., min_length=1),
@@ -264,6 +302,26 @@ def get_audit(order_id: str = Path(..., min_length=1),
     trail["disclaimer"] = ("Synthetic simulation result - validates policy "
                            "logic, not production accuracy.")
     return trail
+
+
+# --------------------------------------------------------------------------
+# The built dashboard
+# --------------------------------------------------------------------------
+# Mounted last so it never shadows an API route. If frontend/dist does not
+# exist yet (nobody has run the build), the API still works and only the UI is
+# missing - a missing dashboard should not take the service down.
+_DIST = pathlib.Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+if _DIST.is_dir():
+    app.mount("/assets", StaticFiles(directory=_DIST / "assets"), name="assets")
+
+    @app.get("/", include_in_schema=False)
+    def dashboard():
+        return FileResponse(_DIST / "index.html")
+
+    @app.get("/evaluation.json", include_in_schema=False)
+    def evaluation_data():
+        return FileResponse(_DIST / "evaluation.json")
 
 
 if __name__ == "__main__":

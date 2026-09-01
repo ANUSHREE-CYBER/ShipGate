@@ -438,6 +438,84 @@ class AuditLog:
                GROUP BY recommended_action ORDER BY n DESC""")
         return {r["recommended_action"]: r["n"] for r in rows}
 
+    def list_orders(self, action: str = None, tier: str = None,
+                    outcome: str = None, overridden: bool = None,
+                    sort: str = "score", limit: int = 50, offset: int = 0) -> dict:
+        """The order queue: one row per order, showing its latest state.
+
+        An order can be scored more than once, so this reports only the most
+        recent decision for each - the queue answers "where does this order
+        stand now", and the full history is one click away in get_audit.
+
+        Returns {"total": n, "items": [...]} so the UI can paginate honestly
+        rather than guessing whether there is more.
+        """
+        if sort not in ("score", "recent"):
+            raise ValueError("sort must be 'score' or 'recent', got %r" % (sort,))
+        if outcome not in (None, "rto", "delivered", "pending"):
+            raise ValueError("outcome must be rto, delivered or pending, got %r"
+                             % (outcome,))
+
+        where, params = [], []
+        if action:
+            where.append("d.recommended_action = ?")
+            params.append(action)
+        if tier:
+            where.append("d.policy_tier = ?")
+            params.append(tier)
+        if overridden is True:
+            where.append("ov.override_id IS NOT NULL")
+        elif overridden is False:
+            where.append("ov.override_id IS NULL")
+        if outcome == "pending":
+            where.append("oc.outcome_id IS NULL")
+        elif outcome == "rto":
+            where.append("oc.is_rto = 1")
+        elif outcome == "delivered":
+            where.append("oc.is_rto = 0")
+
+        # Latest decision per order, with its override (if any) and the latest
+        # outcome for that order.
+        base = """
+            FROM decisions d
+            JOIN (SELECT order_id, MAX(decision_id) AS decision_id
+                    FROM decisions GROUP BY order_id) latest
+              ON latest.decision_id = d.decision_id
+            LEFT JOIN overrides ov ON ov.decision_id = d.decision_id
+            LEFT JOIN (SELECT order_id, MAX(outcome_id) AS outcome_id
+                         FROM outcomes GROUP BY order_id) lo
+              ON lo.order_id = d.order_id
+            LEFT JOIN outcomes oc ON oc.outcome_id = lo.outcome_id
+        """
+        clause = (" WHERE " + " AND ".join(where)) if where else ""
+        total = self._conn.execute("SELECT COUNT(*) " + base + clause, params).fetchone()[0]
+
+        order_by = ("d.score DESC, d.decision_id"
+                    if sort == "score" else "d.decided_at DESC, d.decision_id DESC")
+        rows = self._conn.execute(
+            """SELECT d.decision_id, d.order_id, d.merchant_id, d.decided_at,
+                      d.score, d.evidence_score, d.policy_tier,
+                      d.recommended_action, d.safeguards_applied,
+                      ov.action AS override_action, ov.actor AS override_actor,
+                      ov.reason AS override_reason,
+                      oc.is_rto AS outcome_is_rto, oc.recorded_at AS outcome_at
+               """ + base + clause +
+            " ORDER BY " + order_by + " LIMIT ? OFFSET ?",
+            params + [limit, offset])
+
+        items = []
+        for row in rows:
+            record = dict(row)
+            record["safeguards_applied"] = json.loads(record["safeguards_applied"])
+            record["was_overridden"] = record["override_action"] is not None
+            record["final_action"] = (record["override_action"]
+                                      or record["recommended_action"])
+            record["outcome"] = (None if record["outcome_is_rto"] is None
+                                 else bool(record["outcome_is_rto"]))
+            items.append(record)
+
+        return {"total": total, "limit": limit, "offset": offset, "items": items}
+
     def review_queue(self, limit: int = 50) -> list:
         """Orders recommended for manual review that nobody has overridden yet."""
         rows = self._conn.execute(
