@@ -40,10 +40,21 @@ stated costs rather than a modelling accident.
 
 It is worth understanding where it comes from: the -300 false-positive cost
 assumes a disrupted customer is lost entirely at full margin. That is the right
-price for a hard block. It is almost certainly too harsh for a confirmation
-step, which is what the Medium tier actually does. A per-action cost model would
-be more faithful to the product, and is noted in the README as future work
-rather than quietly assumed here.
+price for a hard block. It is the wrong price for a confirmation SMS, which is
+what the Medium tier actually does.
+
+So this module reports TWO cost tables. The brief's, unchanged, because it was
+specified and it is the honest blunt-instrument baseline. And a graduated one
+that prices each action for what it actually does - see ActionCost. The brief's
+table turns out to be the limiting case of the graduated model with
+prevent_rate and abandon_rate both at 1.0, which is precisely the arithmetic of
+a hard block. That equivalence is the argument for graduated actions, and it is
+a derivation rather than an assertion.
+
+The graduated model's prevent/abandon rates are ASSUMPTIONS about real human
+behaviour that no amount of synthetic data can supply. They are stated as such,
+and the report prints the abandon rate at which each action stops paying for
+itself so the fragility of the conclusion is visible rather than buried.
 """
 
 from dataclasses import dataclass
@@ -75,6 +86,83 @@ TIER_THRESHOLDS = (
     ("high+ (prepaid nudge and above)", 61),
     ("very_high (manual review only)", 86),
 )
+
+# --- Per-action economics -------------------------------------------------
+# The table above prices every intervention identically, which is only correct
+# for a hard block. ShipGate's whole argument is that a confirmation SMS is not
+# a lost sale. Modelling that needs three numbers per action rather than one.
+#
+# Absolute accounting, per order:
+#     delivered and kept   +300   (margin)
+#     came back as RTO     -200   (two-way freight)
+#     abandoned/cancelled     0   (no sale, but no freight either)
+#     minus the action's operating cost
+#
+# A blunt block is the limiting case of this model: prevent_rate 1.0 (nothing
+# ships, so nothing can come back) and abandon_rate 1.0 (the customer is gone).
+# Substituting those reproduces the brief's +200 / -300 swings exactly, which is
+# why that table is so hostile to intervening - it charges block prices for
+# every action ShipGate offers.
+ORDER_MARGIN = 300.0
+RTO_FREIGHT_COST = -200.0
+
+
+@dataclass(frozen=True)
+class ActionCost:
+    """What one action does to an order's economics.
+
+    prevent_rate  - share of orders that WOULD have come back that this action
+                    stops (address corrected, order cancelled, switched to
+                    prepaid). The order does not ship, so no freight is burned.
+    abandon_rate  - share of orders that WOULD have delivered fine where the
+                    friction loses the sale.
+    op_cost       - direct cost of performing the action, per order.
+    """
+
+    label: str
+    prevent_rate: float
+    abandon_rate: float
+    op_cost: float
+
+    def value(self, is_rto: bool) -> float:
+        """Expected rupee value of this order, given what it would have done."""
+        if is_rto:
+            return (1.0 - self.prevent_rate) * RTO_FREIGHT_COST - self.op_cost
+        return (1.0 - self.abandon_rate) * ORDER_MARGIN - self.op_cost
+
+    @property
+    def break_even_p(self) -> float:
+        """RTO probability above which this action beats shipping normally.
+
+        Acting gains prevent_rate * 200 on a bad order and loses
+        abandon_rate * 300 on a good one, minus the operating cost throughout.
+        """
+        gain = self.prevent_rate * -RTO_FREIGHT_COST
+        loss = self.abandon_rate * ORDER_MARGIN
+        if gain + loss == 0:
+            return float("inf")
+        return (loss + self.op_cost) / (gain + loss)
+
+
+# These rates are ASSUMPTIONS, not measurements. Nothing in the synthetic data
+# says how many customers abandon after an OTP prompt - that is a fact about
+# real human behaviour which this project has no data on. They are set to
+# defensible mid-range values and the sensitivity of the conclusion to them is
+# reported below, because the per-action result depends on them entirely.
+ACTIONS = {
+    "ship": ActionCost("ship normally", 0.00, 0.00, 0.0),
+    "confirm": ActionCost("confirmation / OTP", 0.35, 0.03, 5.0),
+    "nudge": ActionCost("prepaid incentive nudge", 0.55, 0.12, 15.0),
+    "review": ActionCost("manual review queue", 0.75, 0.20, 40.0),
+    "block": ActionCost("hard block (brief's price)", 1.00, 1.00, 0.0),
+}
+
+TIER_ACTIONS = {
+    Tier.LOW: "ship",
+    Tier.MEDIUM: "confirm",
+    Tier.HIGH: "nudge",
+    Tier.VERY_HIGH: "review",
+}
 
 
 @dataclass(frozen=True)
@@ -197,6 +285,26 @@ def pr_auc(scored: list) -> float:
 
 def prevalence(scored: list) -> float:
     return sum(s.is_rto for s in scored) / len(scored) if scored else float("nan")
+
+
+def policy_value(scored: list, action_for) -> tuple:
+    """Total rupee value of applying `action_for` to every order.
+
+    Returns (total, counts) where counts is how many orders got each action, so
+    the operational load of a policy is visible next to its value.
+    """
+    total = 0.0
+    counts = {}
+    for s in scored:
+        name = action_for(s)
+        total += ACTIONS[name].value(s.is_rto)
+        counts[name] = counts.get(name, 0) + 1
+    return total, counts
+
+
+def shipgate_action_for(s: Scored) -> str:
+    """The actual product: tier decides the action, after safeguards."""
+    return TIER_ACTIONS[s.tier]
 
 
 def best_threshold_by_value(scored: list) -> tuple:
@@ -339,6 +447,74 @@ def report(orders_path: str = "data/orders.csv",
     print("  Threshold %d was selected on the train slice (net value %s there)"
           % (chosen, _money(train_value)))
     print("  and applied unchanged to test. No threshold was chosen with hindsight.")
+    print()
+    print("  NOTE: this table prices every intervention as a lost customer at full")
+    print("  margin, which is the cost of a hard BLOCK. ShipGate does not block.")
+    print("  The graduated table below prices each action for what it actually is.")
+    print()
+
+    # --- Per-action economics --------------------------------------------
+    print(_rule())
+    print("GRADUATED ACTION ECONOMICS (absolute rupees, test slice)")
+    print(_rule())
+    print("  Each action has its own break-even, because each does a different")
+    print("  amount of good and a different amount of harm.")
+    print()
+    print("  %-26s %8s %8s %7s %11s %12s"
+          % ("action", "prevents", "abandons", "cost", "break-even", "tier RTO"))
+    tier_rate = {}
+    for tier, name in TIER_ACTIONS.items():
+        subset = [s for s in test if s.tier is tier]
+        tier_rate[name] = prevalence(subset) if subset else float("nan")
+    for name in ("ship", "confirm", "nudge", "review", "block"):
+        a = ACTIONS[name]
+        rate = tier_rate.get(name)
+        observed = "%11.1f%%" % (100 * rate) if rate is not None and rate == rate else " " * 12
+        breakeven = ("%10s " % "-" if a.break_even_p == float("inf")
+                     else "%10.1f%%" % (100 * a.break_even_p))
+        print("  %-26s %7.0f%% %8.0f%% %7.0f %s %s"
+              % (a.label, 100 * a.prevent_rate, 100 * a.abandon_rate, a.op_cost,
+                 breakeven, observed))
+    print()
+    print("  'tier RTO' is the measured failure rate of the tier that triggers")
+    print("  that action. An action is justified where its tier's rate exceeds")
+    print("  its own break-even.")
+    print()
+
+    ship_all, _ = policy_value(test, lambda s: "ship")
+    shipgate, load = policy_value(test, shipgate_action_for)
+    confirm_all, _ = policy_value(test, lambda s: "confirm")
+    block_tiers, _ = policy_value(
+        test, lambda s: "block" if s.tier is not Tier.LOW else "ship")
+    block_vh, _ = policy_value(
+        test, lambda s: "block" if s.tier is Tier.VERY_HIGH else "ship")
+
+    print("  %-44s %13s %12s" % ("policy", "net value", "vs ship-all"))
+    for label, value in (
+        ("ship everything (do nothing)", ship_all),
+        ("ShipGate graduated tiers", shipgate),
+        ("confirm every order", confirm_all),
+        ("hard block everything above Low", block_tiers),
+        ("hard block Very High only", block_vh),
+    ):
+        print("  %-44s %13s %12s"
+              % (label, _money(value), _money(value - ship_all)))
+    print()
+    print("  ShipGate's operational load: %s"
+          % ", ".join("%d %s" % (n, k) for k, n in sorted(load.items())))
+    print()
+    print("  THE RATES ABOVE ARE ASSUMPTIONS, NOT MEASUREMENTS. Nothing in")
+    print("  synthetic data can tell us how many real customers abandon after an")
+    print("  OTP prompt. Sensitivity - the abandon rate at which each action stops")
+    print("  paying for itself, holding its tier's measured RTO rate fixed:")
+    for name in ("confirm", "nudge", "review"):
+        a = ACTIONS[name]
+        p = tier_rate[name]
+        # Solve p*prevent*200 = abandon*300*(1-p)... + op_cost for abandon.
+        breakeven_abandon = ((p * a.prevent_rate * -RTO_FREIGHT_COST - a.op_cost)
+                             / (ORDER_MARGIN * (1 - p))) if p == p and p < 1 else float("nan")
+        print("    %-26s assumed %.0f%%, stops paying above %.0f%%"
+              % (a.label, 100 * a.abandon_rate, 100 * breakeven_abandon))
     print()
     print(_rule())
     print(CAVEAT)

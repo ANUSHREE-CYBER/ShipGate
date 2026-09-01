@@ -149,6 +149,77 @@ def test_prevalence_is_the_positive_rate():
 
 
 # --------------------------------------------------------------------------
+# Per-action economics
+# --------------------------------------------------------------------------
+def test_block_action_reproduces_the_briefs_swings():
+    """The brief's table is the graduated model with prevent=abandon=1.0.
+
+    This equivalence is the whole argument for graduated actions, so it is
+    asserted rather than merely claimed in a docstring. A hard block turns a
+    would-be RTO from -200 into 0 (the +200 'saved') and a good order from +300
+    into 0 (the -300 'lost').
+    """
+    block, ship = ev.ACTIONS["block"], ev.ACTIONS["ship"]
+    assert block.value(True) - ship.value(True) == pytest.approx(ev.TP_VALUE)
+    assert block.value(False) - ship.value(False) == pytest.approx(ev.FP_COST)
+    assert ship.value(True) == pytest.approx(ev.FN_COST)
+    assert ship.value(False) == pytest.approx(ev.TN_VALUE)
+
+
+def test_block_break_even_matches_the_briefs_break_even():
+    assert ev.ACTIONS["block"].break_even_p == pytest.approx(ev.BREAK_EVEN_P)
+
+
+def test_gentler_actions_have_lower_break_evens():
+    """The point of graduated actions: a cheap one is worth doing sooner."""
+    order = [ev.ACTIONS[n].break_even_p
+             for n in ("confirm", "nudge", "review", "block")]
+    assert order == sorted(order)
+
+
+def test_doing_nothing_never_has_a_break_even():
+    assert ev.ACTIONS["ship"].break_even_p == float("inf")
+
+
+def test_each_tiers_action_clears_its_own_break_even():
+    """The headline claim of the graduated table, pinned against real data."""
+    records = ev.load_dataset()
+    _, test_records = ev.split_chronological(records)
+    test = ev.score_records(test_records)
+    for tier, name in ev.TIER_ACTIONS.items():
+        if name == "ship":
+            continue
+        subset = [s for s in test if s.tier is tier]
+        assert subset, "tier %s had no orders" % tier
+        assert ev.prevalence(subset) > ev.ACTIONS[name].break_even_p, (
+            "%s fires on a population failing at %.3f, below its break-even %.3f"
+            % (name, ev.prevalence(subset), ev.ACTIONS[name].break_even_p)
+        )
+
+
+def test_policy_value_counts_every_order_once():
+    scored = [make(90, True), make(10, False), make(50, True)]
+    total, counts = ev.policy_value(scored, lambda s: "ship")
+    assert sum(counts.values()) == len(scored)
+    assert total == pytest.approx(2 * ev.FN_COST + ev.TN_VALUE)
+
+
+def test_blocking_a_low_risk_population_destroys_value():
+    """Blunt action on mostly-good orders must lose money, or the model is wrong."""
+    scored = [make(50, i < 10) for i in range(100)]  # 10% RTO
+    ship, _ = ev.policy_value(scored, lambda s: "ship")
+    block, _ = ev.policy_value(scored, lambda s: "block")
+    assert block < ship
+
+
+def test_action_value_is_bounded_by_the_no_action_case():
+    """An action can only ever reduce the freight loss, never invert it."""
+    for name, action in ev.ACTIONS.items():
+        assert ev.RTO_FREIGHT_COST - action.op_cost <= action.value(True) <= 0.0
+        assert 0.0 - action.op_cost <= action.value(False) <= ev.ORDER_MARGIN
+
+
+# --------------------------------------------------------------------------
 # End to end
 # --------------------------------------------------------------------------
 def test_report_runs_on_the_real_dataset(capsys):
