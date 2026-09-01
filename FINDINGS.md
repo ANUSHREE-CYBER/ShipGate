@@ -1181,12 +1181,12 @@ The synthetic-data disclaimer sits permanently below the masthead on every view.
 
 ### Not certain about
 
-- **The rendered UI has not been visually confirmed.** The build succeeds, every
-  route it calls is tested, and the data it receives has been checked by hand
-  over HTTP — but nobody has actually looked at it in a browser. Layout,
-  contrast and the drawer's scroll behaviour are unverified. This is the first
-  thing to check tomorrow, and it needs checking before the demo video, not
-  during it.
+- ~~**The rendered UI has not been visually confirmed.**~~ **Closed 2026-09-02.**
+  Checked in a browser end to end: order queue, decision drawer, override flow,
+  outcome recording and the cost evidence page all behave correctly and render
+  cleanly. No visual issues found. This was the largest open risk on the
+  dashboard and it is now retired — the demo video can be recorded against the
+  UI as it stands.
 - **There are no JavaScript tests.** The backend contract the dashboard depends
   on is covered by 43 endpoint tests, but component rendering is not. Adding
   Vitest is a real cost with three days left; the honest trade is that a
