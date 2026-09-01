@@ -11,3 +11,10 @@ venv/
 data/*.csv
 data/*.db
 data/*.sqlite3
+
+# Frontend
+frontend/node_modules/
+
+# frontend/dist IS committed on purpose: it lets a judge clone the repo and run
+# the demo with one command and no Node toolchain. Rebuild with:
+#   cd frontend && npm install && npm run build

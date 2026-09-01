@@ -1,0 +1,275 @@
+{
+  "evaluation_version": "1.0.0",
+  "disclaimer": "Synthetic simulation result - validates policy logic, not production accuracy.",
+  "split": {
+    "train_orders": 7000,
+    "test_orders": 3000,
+    "train_from": "2026-06-01",
+    "train_to": "2026-08-09",
+    "test_from": "2026-08-09",
+    "test_to": "2026-08-29"
+  },
+  "ranking": {
+    "cod_only": {
+      "pr_auc": 0.4172,
+      "baseline": 0.3124,
+      "n": 1674
+    },
+    "all_orders": {
+      "pr_auc": 0.3923,
+      "baseline": 0.1987,
+      "n": 3000
+    }
+  },
+  "operating_points": [
+    {
+      "policy": "medium+ (confirm and above)",
+      "tp": 481,
+      "fp": 1020,
+      "fn": 42,
+      "tn": 131,
+      "flagged": 1501,
+      "precision": 0.3205,
+      "recall": 0.9197,
+      "f1": 0.4753,
+      "net_value": -178900.0
+    },
+    {
+      "policy": "high+ (prepaid nudge and above)",
+      "tp": 114,
+      "fp": 131,
+      "fn": 409,
+      "tn": 1020,
+      "flagged": 245,
+      "precision": 0.4653,
+      "recall": 0.218,
+      "f1": 0.2969,
+      "net_value": 207700.0
+    },
+    {
+      "policy": "very_high (manual review only)",
+      "tp": 20,
+      "fp": 10,
+      "fn": 503,
+      "tn": 1141,
+      "flagged": 30,
+      "precision": 0.6667,
+      "recall": 0.0382,
+      "f1": 0.0723,
+      "net_value": 242700.0
+    }
+  ],
+  "segments": [
+    {
+      "segment": "new customer",
+      "n": 621,
+      "rto_rate": 0.3108,
+      "pr_auc": 0.3237
+    },
+    {
+      "segment": "known customer",
+      "n": 1053,
+      "rto_rate": 0.3134,
+      "pr_auc": 0.4539
+    },
+    {
+      "segment": "gemstone",
+      "n": 359,
+      "rto_rate": 0.2981,
+      "pr_auc": 0.4014
+    },
+    {
+      "segment": "fast_fashion",
+      "n": 1315,
+      "rto_rate": 0.3163,
+      "pr_auc": 0.4226
+    }
+  ],
+  "blunt_cost_table": {
+    "break_even_p": 0.6,
+    "note": "Prices every intervention as a customer lost at full margin, which is the cost of a hard block.",
+    "policies": [
+      {
+        "policy": "conservative: score >= 61",
+        "tp": 116,
+        "fp": 132,
+        "fn": 480,
+        "tn": 2272,
+        "flagged": 248,
+        "precision": 0.4677,
+        "recall": 0.1946,
+        "f1": 0.2749,
+        "net_value": 569200.0
+      },
+      {
+        "policy": "balanced: score >= 31",
+        "tp": 493,
+        "fp": 1121,
+        "fn": 103,
+        "tn": 1283,
+        "flagged": 1614,
+        "precision": 0.3055,
+        "recall": 0.8272,
+        "f1": 0.4462,
+        "net_value": 126600.0
+      },
+      {
+        "policy": "aggressive: score >= 21",
+        "tp": 549,
+        "fp": 1411,
+        "fn": 47,
+        "tn": 993,
+        "flagged": 1960,
+        "precision": 0.2801,
+        "recall": 0.9211,
+        "f1": 0.4296,
+        "net_value": -25000.0
+      },
+      {
+        "policy": "value-optimal on train: >= 87",
+        "tp": 18,
+        "fp": 10,
+        "fn": 578,
+        "tn": 2394,
+        "flagged": 28,
+        "precision": 0.6429,
+        "recall": 0.0302,
+        "f1": 0.0577,
+        "net_value": 603200.0
+      },
+      {
+        "policy": "reference: flag nothing",
+        "tp": 0,
+        "fp": 0,
+        "fn": 596,
+        "tn": 2404,
+        "flagged": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "net_value": 602000.0
+      },
+      {
+        "policy": "reference: flag everything",
+        "tp": 596,
+        "fp": 2404,
+        "fn": 0,
+        "tn": 0,
+        "flagged": 3000,
+        "precision": 0.1987,
+        "recall": 1.0,
+        "f1": 0.3315,
+        "net_value": -602000.0
+      },
+      {
+        "policy": "reference: flag every COD order",
+        "tp": 523,
+        "fp": 1151,
+        "fn": 73,
+        "tn": 1253,
+        "flagged": 1674,
+        "precision": 0.3124,
+        "recall": 0.8775,
+        "f1": 0.4608,
+        "net_value": 120600.0
+      }
+    ]
+  },
+  "graduated_actions": [
+    {
+      "action": "ship",
+      "label": "ship normally",
+      "prevent_rate": 0.0,
+      "abandon_rate": 0.0,
+      "op_cost": 0.0,
+      "break_even_p": null,
+      "tier_rto_rate": 0.0741
+    },
+    {
+      "action": "confirm",
+      "label": "confirmation / OTP",
+      "prevent_rate": 0.35,
+      "abandon_rate": 0.03,
+      "op_cost": 5.0,
+      "break_even_p": 0.1772,
+      "tier_rto_rate": 0.2761
+    },
+    {
+      "action": "nudge",
+      "label": "prepaid incentive nudge",
+      "prevent_rate": 0.55,
+      "abandon_rate": 0.12,
+      "op_cost": 15.0,
+      "break_even_p": 0.3493,
+      "tier_rto_rate": 0.4912
+    },
+    {
+      "action": "review",
+      "label": "manual review queue",
+      "prevent_rate": 0.75,
+      "abandon_rate": 0.2,
+      "op_cost": 40.0,
+      "break_even_p": 0.4762,
+      "tier_rto_rate": 0.6667
+    },
+    {
+      "action": "block",
+      "label": "hard block (brief's price)",
+      "prevent_rate": 1.0,
+      "abandon_rate": 1.0,
+      "op_cost": 0.0,
+      "break_even_p": 0.6,
+      "tier_rto_rate": null
+    }
+  ],
+  "graduated_policies": [
+    {
+      "policy": "ship everything (do nothing)",
+      "net_value": 602000.0,
+      "vs_ship_all": 0.0
+    },
+    {
+      "policy": "ShipGate graduated tiers",
+      "net_value": 617748.0,
+      "vs_ship_all": 15748.0
+    },
+    {
+      "policy": "confirm every order",
+      "net_value": 607084.0,
+      "vs_ship_all": 5084.0
+    },
+    {
+      "policy": "hard block everything above Low",
+      "net_value": 365500.0,
+      "vs_ship_all": -236500.0
+    },
+    {
+      "policy": "hard block Very High only",
+      "net_value": 603000.0,
+      "vs_ship_all": 1000.0
+    }
+  ],
+  "operational_load": {
+    "confirm": 1409,
+    "ship": 1390,
+    "review": 30,
+    "nudge": 171
+  },
+  "assumption_sensitivity": [
+    {
+      "action": "confirmation / OTP",
+      "assumed_abandon_rate": 0.03,
+      "stops_paying_above": 0.066
+    },
+    {
+      "action": "prepaid incentive nudge",
+      "assumed_abandon_rate": 0.12,
+      "stops_paying_above": 0.2557
+    },
+    {
+      "action": "manual review queue",
+      "assumed_abandon_rate": 0.2,
+      "stops_paying_above": 0.6001
+    }
+  ]
+}
