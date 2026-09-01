@@ -12,7 +12,7 @@ import sqlite3
 
 import pytest
 
-from app.audit_service import AUDIT_SCHEMA_VERSION, AuditLog
+from app.audit_service import AUDIT_SCHEMA_VERSION, AuditLog, UnknownOrderError
 from app.policy_engine import DEFAULT_POLICY, Action, apply_override, decide
 from app.rule_engine import OrderFeatures, assess
 
@@ -267,3 +267,87 @@ def test_review_queue_is_ordered_by_score(log):
     queue = log.review_queue()
     assert [r["order_id"] for r in queue] == ["ORD-BAD", "ORD-MILD"]
     assert queue[0]["score"] >= queue[1]["score"]
+
+
+# --------------------------------------------------------------------------
+# Orphan protection
+# --------------------------------------------------------------------------
+def test_outcome_for_an_unscored_order_is_refused(log):
+    """A typo in an order id must not become a permanent orphan row."""
+    with pytest.raises(UnknownOrderError, match="check the order id"):
+        log.record_outcome("ORD-TYPO", is_rto=True, source="courier")
+    assert log.counts()["outcomes"] == 0
+
+
+def test_the_orphan_guard_can_be_waived_deliberately(log):
+    """A merchant back-loading history may genuinely have no decision for it."""
+    log.record_outcome("ORD-HISTORIC", is_rto=True, source="backfill",
+                       require_known_order=False)
+    assert log.counts()["outcomes"] == 1
+
+
+def test_unknown_order_error_is_still_a_value_error(log):
+    """Callers catching ValueError must keep working."""
+    assert issubclass(UnknownOrderError, ValueError)
+    with pytest.raises(ValueError):
+        log.record_outcome("ORD-TYPO", is_rto=True, source="courier")
+
+
+def test_has_order_tracks_decisions(log):
+    assert log.has_order("ORD-001") is False
+    log.record_decision(decision_for(**REFUSER))
+    assert log.has_order("ORD-001") is True
+
+
+def test_latest_decision_id_refuses_an_unknown_order(log):
+    with pytest.raises(UnknownOrderError, match="nothing to override"):
+        log.latest_decision_id("ORD-NOPE")
+
+
+def test_latest_decision_id_returns_the_most_recent(log):
+    first = log.record_decision(decision_for(**REFUSER))
+    second = log.record_decision(decision_for(**REFUSER))
+    assert first != second
+    assert log.latest_decision_id("ORD-001") == second
+
+
+# --------------------------------------------------------------------------
+# Batched writes
+# --------------------------------------------------------------------------
+def test_batch_commits_everything_in_one_go(log):
+    with log.batch():
+        for i in range(5):
+            log.record_decision(decision_for(**dict(REFUSER, order_id="ORD-%03d" % i)))
+    assert log.counts()["decisions"] == 5
+
+
+def test_a_failed_batch_leaves_no_half_written_trail(log):
+    """For an audit log, all-or-nothing beats a partial write."""
+    with pytest.raises(ValueError):
+        with log.batch():
+            log.record_decision(decision_for(**REFUSER))
+            log.record_outcome("ORD-NOPE", is_rto=True, source="courier")
+    assert log.counts() == {"decisions": 0, "orders": 0, "overrides": 0, "outcomes": 0}
+
+
+def test_batches_do_not_nest(log):
+    with pytest.raises(RuntimeError, match="nested batches"):
+        with log.batch():
+            with log.batch():
+                pass
+
+
+def test_append_only_still_holds_inside_a_batch(log):
+    """Batching changes when we commit, never what is allowed."""
+    log.record_decision(decision_for(**REFUSER))
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        with log.batch():
+            log._conn.execute("UPDATE decisions SET score = 0")
+
+
+def test_batching_survives_being_used_twice(log):
+    with log.batch():
+        log.record_decision(decision_for(**REFUSER))
+    with log.batch():
+        log.record_decision(decision_for(**CLEAN))
+    assert log.counts()["decisions"] == 2
