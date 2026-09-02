@@ -38,21 +38,26 @@ function RuleTable({ rules }) {
         <tbody>
           {Object.entries(byGroup).map(([group, groupRules]) => (
             <Fragment key={group}>
-              <tr>
-                <td colSpan={3} style={{ color: 'var(--muted)', fontSize: 12 }}>
-                  {GROUP_LABELS[group] || group}
-                </td>
+              <tr className="rule-group">
+                <th colSpan={2} scope="colgroup">{GROUP_LABELS[group] || group}</th>
+                <th className="num rule-group-total">
+                  {(() => {
+                    const subtotal = groupRules.reduce((n, r) => n + r.points, 0)
+                    return subtotal > 0 ? `+${subtotal}` : subtotal
+                  })()}
+                </th>
               </tr>
               {groupRules.map((rule, i) => (
-                <tr key={`${group}-${rule.id}-${i}`}>
+                <tr key={`${group}-${rule.id}-${i}`} className="rule-row">
                   <td>
-                    {rule.label} <span style={{ color: 'var(--muted)' }}>({rule.id})</span>
+                    <span className="rule-name">{rule.label}</span>
+                    <span className="rule-id">{rule.id}</span>
                     {rule.evidence && <span className="evidence-tag">evidence</span>}
                   </td>
                   <td className={`num pts${rule.points < 0 ? ' neg' : ''}`}>
                     {rule.points > 0 ? `+${rule.points}` : rule.points}
                   </td>
-                  <td style={{ color: 'var(--muted)' }}>{rule.detail}</td>
+                  <td className="rule-detail">{rule.detail}</td>
                 </tr>
               ))}
             </Fragment>
@@ -88,6 +93,24 @@ export default function DecisionDrawer({ orderId, onClose, onChanged }) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
+
+  // Stop the page behind the drawer scrolling when the drawer itself runs out
+  // of content. Removing the scrollbar would shift the layout sideways, so its
+  // width is replaced with padding for as long as the drawer is open.
+  useEffect(() => {
+    const { body } = document
+    const previousOverflow = body.style.overflow
+    const previousPadding = body.style.paddingRight
+    const scrollbar = window.innerWidth - document.documentElement.clientWidth
+
+    body.style.overflow = 'hidden'
+    if (scrollbar > 0) body.style.paddingRight = `${scrollbar}px`
+
+    return () => {
+      body.style.overflow = previousOverflow
+      body.style.paddingRight = previousPadding
+    }
+  }, [])
 
   async function submitOverride(e) {
     e.preventDefault()

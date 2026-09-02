@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { FlaskConical, IndianRupee, ListChecks, ShieldCheck } from 'lucide-react'
+import { ArrowUp, FlaskConical, IndianRupee, ListChecks, ShieldCheck } from 'lucide-react'
 import OrderQueue from './components/OrderQueue'
 import DecisionDrawer from './components/DecisionDrawer'
 import CostEvidence from './components/CostEvidence'
@@ -17,13 +17,16 @@ const TABS = [
  * after an override without the table needing to be on screen.
  */
 function TopBar({ refreshToken }) {
-  const [total, setTotal] = useState(null)
+  // "not asked yet" and "asked and failed" are different things, and rendering
+  // both as "queue unavailable" made an in-flight request look like an outage.
+  const [state, setState] = useState({ status: 'loading', total: null })
 
   useEffect(() => {
     let cancelled = false
+    setState({ status: 'loading', total: null })
     listOrders({ limit: 1 })
-      .then((page) => { if (!cancelled) setTotal(page.total) })
-      .catch(() => { if (!cancelled) setTotal(null) })
+      .then((page) => { if (!cancelled) setState({ status: 'ok', total: page.total }) })
+      .catch(() => { if (!cancelled) setState({ status: 'failed', total: null }) })
     return () => { cancelled = true }
   }, [refreshToken])
 
@@ -39,16 +42,52 @@ function TopBar({ refreshToken }) {
           </span>
         </div>
         <div className="topbar-meta">
-          {total === null ? (
-            <span className="topbar-count muted">queue unavailable</span>
-          ) : (
+          {state.status === 'ok' ? (
             <span className="topbar-count">
-              <strong>{total.toLocaleString()}</strong> orders in queue
+              <strong>{state.total.toLocaleString()}</strong> orders in queue
+            </span>
+          ) : (
+            <span className="topbar-count muted">
+              {state.status === 'loading' ? 'loading queue…' : 'queue unavailable'}
             </span>
           )}
         </div>
       </div>
     </div>
+  )
+}
+
+/**
+ * Back-to-top, shown once the page has scrolled far enough to be worth it.
+ *
+ * Sits at z-index 45: above the page, below the drawer backdrop (50) and the
+ * toasts (100). It is not rendered while the drawer is open, because the drawer
+ * scrolls in its own container - a window scroll would do nothing there, and a
+ * control that visibly does nothing is worse than no control.
+ */
+function ScrollToTop({ hidden }) {
+  const [show, setShow] = useState(false)
+
+  useEffect(() => {
+    const onScroll = () => setShow(window.scrollY > 400)
+    onScroll()
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [])
+
+  if (hidden || !show) return null
+
+  const toTop = () => {
+    // Honour the OS "reduce motion" setting - a long smooth scroll is exactly
+    // the kind of movement that setting exists to switch off.
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    window.scrollTo({ top: 0, behavior: reduced ? 'auto' : 'smooth' })
+  }
+
+  return (
+    <button className="scroll-top" onClick={toTop} aria-label="Back to top" title="Back to top">
+      <ArrowUp size={17} strokeWidth={2.5} aria-hidden="true" />
+    </button>
   )
 }
 
@@ -131,6 +170,8 @@ export default function App() {
           />
         )}
       </div>
+
+      <ScrollToTop hidden={Boolean(selectedId)} />
     </ToastProvider>
   )
 }

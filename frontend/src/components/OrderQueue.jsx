@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { CircleDashed, PackageCheck, Undo2 } from 'lucide-react'
 import { listOrders } from '../api'
 import { FinalAction } from './ActionBadge'
+import QueueStats from './QueueStats'
 
 const PAGE_SIZE = 25
 
@@ -58,6 +59,8 @@ export default function OrderQueue({ selectedId, onSelect, refreshToken }) {
         full reasoning and its audit trail.
       </p>
 
+      <QueueStats refreshToken={refreshToken} />
+
       <div className="filters-bar">
         <label>
           Action
@@ -111,7 +114,7 @@ export default function OrderQueue({ selectedId, onSelect, refreshToken }) {
       {page && (
         <>
           <div className="scroll-x">
-            <table>
+            <table className="rows-clickable">
               <thead>
                 <tr>
                   <th>Order</th>
