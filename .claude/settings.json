@@ -43,5 +43,9 @@
       "Bash(curl *)",
       "Bash(gh *)"
     ]
+  },
+  "attribution": {
+    "commit": "",
+    "pr": ""
   }
 }
