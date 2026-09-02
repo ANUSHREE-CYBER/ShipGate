@@ -150,7 +150,18 @@ class AuditLog:
     def __init__(self, path: str = DEFAULT_DB_PATH):
         self.path = path
         self._in_batch = False
-        self._conn = sqlite3.connect(path)
+        # check_same_thread=False because FastAPI runs a generator dependency's
+        # setup, the endpoint body and its teardown through the threadpool, and
+        # those three steps can land on different threads. The connection is
+        # then created on one thread, used on another and closed on a third,
+        # which raises ProgrammingError - but only under concurrency, because a
+        # quiet server reuses one pool thread and never trips it.
+        #
+        # This is safe here and is not a way of sharing one connection between
+        # simultaneous users: every request still gets its own AuditLog, so a
+        # connection is only ever touched by one thread at a time. It migrates
+        # between threads sequentially; it is never used from two at once.
+        self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._create_schema()

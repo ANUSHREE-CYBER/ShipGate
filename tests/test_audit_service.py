@@ -8,6 +8,7 @@ if the guarantee only holds when callers are polite, it is not a guarantee.
 """
 
 from datetime import datetime
+import concurrent.futures
 import sqlite3
 
 import pytest
@@ -351,3 +352,52 @@ def test_batching_survives_being_used_twice(log):
     with log.batch():
         log.record_decision(decision_for(**CLEAN))
     assert log.counts()["decisions"] == 2
+
+
+# --------------------------------------------------------------------------
+# Thread safety
+# --------------------------------------------------------------------------
+def test_a_connection_survives_moving_between_threads(tmp_path):
+    """Regression: the dashboard 500ed on load because of this.
+
+    FastAPI runs a generator dependency's setup, the endpoint body and its
+    teardown through the threadpool, and those three steps can land on
+    different threads. The connection was therefore created on one thread, used
+    on another and closed on a third, raising ProgrammingError.
+
+    It only appeared under concurrency - a quiet server reuses one pool thread -
+    which is why every existing test missed it: TestClient issues requests
+    sequentially. This test moves the connection between threads deliberately.
+    """
+    db = tmp_path / "threads.db"
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        log = pool.submit(AuditLog, str(db)).result()
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(log.record_decision, decision_for(**REFUSER)).result()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            total = pool.submit(lambda: log.list_orders(limit=1)["total"]).result()
+        assert total == 1
+    finally:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            pool.submit(log.close).result()
+
+
+def test_many_readers_at_once_all_succeed(tmp_path):
+    """The dashboard fires about a dozen counting queries on page load."""
+    db = tmp_path / "concurrent.db"
+    with AuditLog(str(db)) as log, log.batch():
+        for i in range(40):
+            log.record_decision(decision_for(**dict(REFUSER, order_id="ORD-%03d" % i)))
+
+    def read(_):
+        reader = AuditLog(str(db))
+        try:
+            return reader.list_orders(limit=1)["total"]
+        finally:
+            reader.close()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=12) as pool:
+        totals = list(pool.map(read, range(12)))
+    assert totals == [40] * 12
