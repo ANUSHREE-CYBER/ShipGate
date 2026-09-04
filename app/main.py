@@ -6,12 +6,12 @@
     POST /orders/{id}/override merchant override, requires a reason
     GET  /orders/{id}/audit    full audit trail for one order
 
-GET /orders was added in Step 8. CLAUDE.md originally froze the API at four
+GET /orders was added in Step 8. The original design froze the API at four
 endpoints, but the dashboard's order queue cannot exist without a way to list
 orders - every other endpoint needs an order id you already know. It is a
 read-only listing over data the other endpoints already produce, adds no new
-behaviour, and CLAUDE.md's endpoint list was updated to match rather than left
-to drift.
+behaviour, and the design's endpoint list was updated to match rather than
+left to drift.
 
 WHAT THIS SERVICE DOES NOT OWN
 ------------------------------

@@ -181,7 +181,7 @@ def test_doing_nothing_never_has_a_break_even():
     assert ev.ACTIONS["ship"].break_even_p == float("inf")
 
 
-def test_each_tiers_action_clears_its_own_break_even():
+def test_each_tiers_action_clears_its_own_break_even(demo_data):
     """The headline claim of the graduated table, pinned against real data."""
     records = ev.load_dataset()
     _, test_records = ev.split_chronological(records)
@@ -222,7 +222,7 @@ def test_action_value_is_bounded_by_the_no_action_case():
 # --------------------------------------------------------------------------
 # End to end
 # --------------------------------------------------------------------------
-def test_report_runs_on_the_real_dataset(capsys):
+def test_report_runs_on_the_real_dataset(demo_data, capsys):
     """Smoke test: the whole pipeline produces a report with the caveat on it."""
     ev.report()
     out = capsys.readouterr().out

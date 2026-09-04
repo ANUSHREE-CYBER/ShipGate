@@ -72,7 +72,7 @@ TRAIN_FRACTION = 0.70
 CAVEAT = ("Synthetic simulation result - validates policy logic, "
           "not production accuracy.")
 
-# --- False-positive cost table (from CLAUDE.md) ---------------------------
+# --- False-positive cost table (from the design brief) --------------------
 TP_VALUE = 200.0    # flagged a risky order, prevented a real RTO
 FP_COST = -300.0    # flagged a genuine customer, caused friction/drop-off
 FN_COST = -200.0    # missed a real RTO, shipped normally, paid two-way freight

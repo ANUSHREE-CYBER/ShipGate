@@ -72,7 +72,7 @@ def test_pincode_safeguard_survives_the_policy_layer():
     assert "pincode_not_pivotal" in d.policy_adjustments
 
 
-def test_default_policy_reproduces_the_engine_tier_exactly():
+def test_default_policy_reproduces_the_engine_tier_exactly(demo_data):
     """With default thresholds the two must never disagree on any real order."""
     from app.feature_normalizer import load_dataset
 
@@ -161,7 +161,7 @@ def test_tier_for_policy_respects_custom_boundaries():
     assert tier_for_policy(100, (21, 51, 76)) is Tier.VERY_HIGH
 
 
-def test_gentle_policy_never_reaches_review():
+def test_gentle_policy_never_reaches_review(demo_data):
     from app.feature_normalizer import load_dataset
 
     for record in load_dataset():

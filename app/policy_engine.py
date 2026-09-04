@@ -156,8 +156,8 @@ class Override:
 class PolicyDecision:
     """Everything the audit trail needs about one decision.
 
-    CLAUDE.md requires each record to carry rule_version, the fired rules, the
-    score before and after caps, the recommended action, any override plus its
+    Every audit record has to carry rule_version, the fired rules, the score
+    before and after caps, the recommended action, any override plus its
     reason, and eventually the outcome. Everything but the outcome is here; the
     outcome is attached later by audit_service, because it does not exist yet at
     decision time.

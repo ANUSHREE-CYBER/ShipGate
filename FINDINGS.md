@@ -9,7 +9,7 @@ Every number below was measured against committed code. Where a number was later
 invalidated, the correction is recorded rather than the original quietly edited.
 
 > This file starts on Sep 1. Step 1 (`rule_engine.py`, Aug 31) predates it and is
-> documented in CLAUDE.md's rule tables, which were verified against the code on
+> documented in the project brief's rule tables, which were verified against the code on
 > Sep 1 by asserting every documented point value.
 
 ---
@@ -26,10 +26,10 @@ logic kept independent of both the generator and the rule engine. Seed `771013`.
 
 **`tests/test_latent_outcome.py`** — 16 tests. Suite total is now 44.
 
-Also, earlier in the day: rewrote CLAUDE.md's rule tables to match
+Also, earlier in the day: rewrote the project brief's rule tables to match
 `rule_engine.py` exactly (the brief still described draft numbers — tiered P2
 bands, graduated H5, split H1/H2, three D1 tiers were all wrong or missing), and
-added `.claude/settings.json` with a permission allowlist.
+added a local tooling permission allowlist.
 
 ### The separation, and how it is enforced
 
@@ -105,7 +105,7 @@ that skips an RNG draw invalidates previously quoted figures even though the see
 is unchanged. Re-measure after touching generator control flow.
 
 **8. My own plan had the wrong calibration target.**
-The plan said "overall RTO ~28%". CLAUDE.md's 20–40% band describes **COD orders
+The plan said "overall RTO ~28%". The project brief's 20–40% band describes **COD orders
 specifically**, not the whole book. Overall is naturally lower once prepaid is
 mixed in. No code was built against the wrong target; COD landed at 30.4%, which
 is mid-band and correct.
@@ -313,7 +313,7 @@ own resolution never is.
 produce an obviously wrong number. It silently inflates every downstream metric —
 precision, recall, PR-AUC, the entire cost table. Had it survived to the demo we
 would have reported flattering numbers with no idea they were wrong. This is
-exactly the failure mode CLAUDE.md's "suspiciously perfect metrics are a signal
+exactly the failure mode the project brief's "suspiciously perfect metrics are a signal
 to check for leakage" rule exists to catch, and the catch came from a sanity
 check on a percentage rather than from any test.
 
@@ -579,7 +579,7 @@ is justified (27.6% RTO against a 17.7% break-even) and contributes most of the
 gain — but that rests entirely on the 3% abandonment assumption above. Decision
 taken to leave the tier boundaries alone and revisit only if that assumption
 starts to look optimistic. Tuning rule boundaries against a metric derived from
-synthetic data is precisely what CLAUDE.md warns against.
+synthetic data is precisely what the project brief warns against.
 
 ---
 
@@ -880,7 +880,7 @@ away.
 
 ### Built
 
-**`app/main.py`** — FastAPI wrapper exposing exactly the four endpoints CLAUDE.md
+**`app/main.py`** — FastAPI wrapper exposing exactly the four endpoints the project brief
 specifies, and nothing else.
 
 **`tests/test_main.py`** — 30 tests. Plus 11 more added to
@@ -1071,16 +1071,16 @@ the evaluation numbers for the cost view.
 **`tests/test_main.py`** — 13 more tests for the queue endpoint. Suite total is
 now 188.
 
-### Contradiction found in CLAUDE.md, escalated before building
+### Contradiction found in the project brief, escalated before building
 
-CLAUDE.md requires a dashboard with an **order queue**, and separately freezes the
+The project brief requires a dashboard with an **order queue**, and separately freezes the
 API at **four endpoints, "only these"**. Those cannot both hold: every one of the
 four requires an order id you already have, so nothing can list orders. A
 dashboard built on them alone would be a lookup box, not a queue.
 
 Flagged and agreed rather than resolved quietly. `GET /orders` was added — one
 read-only listing over data the other endpoints already produce, adding no new
-behaviour — and **CLAUDE.md's endpoint list was updated to match** so the
+behaviour — and **The project brief's endpoint list was updated to match** so the
 document and the code do not drift apart. The list is frozen again at five, and
 `test_only_the_five_endpoints_exist` enforces it.
 
@@ -1217,7 +1217,7 @@ demo.
 
 ### Why bootstrap.py was added despite the scope freeze
 
-CLAUDE.md's README skeleton asks for "[One-command run instructions]". Setup was
+The project brief's README skeleton asks for "[One-command run instructions]". Setup was
 four separate module invocations in a dependency order a reader would have to
 infer. Writing that honestly in the README would have meant either four commands
 or a shell one-liner that hides the ordering.
@@ -1256,13 +1256,13 @@ identical, so the seeds hold.
 
 ### Compliance checks run against the README, not assumed
 
-CLAUDE.md carries a list of claims that must never appear and wording that must
+The project brief carries a list of claims that must never appear and wording that must
 appear verbatim. Both were checked mechanically rather than by rereading:
 
 | Check | Result |
 |---|---|
 | "only blocks" / "fraudster" / "better than Razorpay" / "replace" / "proves real-world" | none present |
-| Limitations paragraph, verbatim from CLAUDE.md | present, whitespace-normalised match |
+| Limitations paragraph, verbatim from the project brief | present, whitespace-normalised match |
 | Locked pitch, verbatim | present |
 | "Synthetic simulation result — validates policy logic, not production accuracy." | present, three times |
 

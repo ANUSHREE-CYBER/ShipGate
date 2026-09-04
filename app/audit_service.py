@@ -1,8 +1,8 @@
 """Append-only audit log for every decision, override and outcome.
 
-CLAUDE.md requires each record to carry the rule version, the fired rules, the
-score before and after caps, the recommended action, any merchant override plus
-its required reason, and the eventual delivery outcome. All of that lives here.
+Every audit record has to carry the rule version, the fired rules, the score
+before and after caps, the recommended action, any merchant override plus its
+required reason, and the eventual delivery outcome. All of that lives here.
 
 WHY APPEND-ONLY, AND WHY THE DATABASE ENFORCES IT
 -------------------------------------------------

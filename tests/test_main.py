@@ -239,7 +239,7 @@ def test_audit_returns_the_full_timeline_in_order(client):
 def test_only_the_five_endpoints_exist(client):
     """Scope freeze is a working rule, so it is enforced by a test.
 
-    GET /orders was added deliberately in Step 8 and CLAUDE.md updated to match;
+    GET /orders was added deliberately in Step 8 and the design brief updated to match;
     the list is frozen again at these five. Anything new has to be argued for.
     """
     paths = {r.path for r in main.app.routes if r.path.startswith(("/risk", "/orders"))}

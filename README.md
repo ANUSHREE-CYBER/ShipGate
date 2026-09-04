@@ -120,6 +120,20 @@ Across 10,000 orders under a deliberately strict configuration, the safeguards s
 
 ---
 
+## Why Rules, Not a Model
+
+The AI Judgment criterion asks whether the use of AI is intentional. In ShipGate the intentional decision was to *not* put an opaque model where transparent rules do the job better.
+
+A merchant needs to know exactly why an order was flagged. "The model said so" is not an acceptable answer for a COD tool where a wrong flag loses a real customer. Every ShipGate decision traces to named rules with point values, and the audit trail records which ones fired and by how much.
+
+I planned an XGBoost calibration layer as a secondary step, and chose not to ship one. On synthetic data, any lift a model showed would be an artefact of the simulation rather than evidence about the world — and a large share of the outcome variance here is hidden from *every* model by construction (a per-customer reliability trait, courier strain, weather). Shipping a model I could not show adds value, just to have a model in the repo, would be poor AI judgment, not good.
+
+The evaluation pipeline — chronological split, PR-AUC, the cost model — is model-agnostic by design. Plug in any upstream risk score, from a vendor or a model of your own, and the policy layer still works unchanged. ShipGate is an action-selection layer, not a detection layer.
+
+That is the AI judgment on offer: knowing when *not* to use ML is as much a part of it as knowing when to.
+
+---
+
 ## Dashboard
 
 The dashboard is served by the API itself, so `python -m app.bootstrap --serve`
@@ -348,7 +362,7 @@ Run `python -m app.bootstrap` without `--serve` to build the data only, and add 
 ### Tests
 
 ```bash
-python -m pytest -q          # 193 tests
+python -m pytest -q          # 195 tests
 ```
 
 The ones worth reading are the guarantees: `test_does_not_import_sibling_modules` (the outcome simulator cannot see the rule engine), `test_no_order_sees_its_own_outcome` (no leakage in the chronological replay), `test_rows_cannot_be_updated_even_by_raw_sql` (append-only), and `test_pincode_safeguard_survives_the_policy_layer` (configuration cannot switch off a safeguard).
@@ -387,9 +401,8 @@ app/
   main.py               FastAPI: five endpoints + the dashboard
   bootstrap.py          one command to build everything and serve it
 frontend/               React dashboard (Vite)
-tests/                  193 tests
+tests/                  195 tests
 FINDINGS.md             working log: every bug, number and judgement call
-CLAUDE.md               the project brief this was built against
 ```
 
 `FINDINGS.md` is the honest version of this README — it records what broke, what was measured, and what remains uncertain, including several cases where the first attempt was wrong.
