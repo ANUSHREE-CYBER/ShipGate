@@ -120,6 +120,84 @@ Across 10,000 orders under a deliberately strict configuration, the safeguards s
 
 ---
 
+## Dashboard
+
+The dashboard is served by the API itself, so `python -m app.bootstrap --serve`
+brings up both at <http://127.0.0.1:8000/>. Every figure shown is produced by
+the pipeline in this repository from synthetic data.
+
+### Order queue
+
+![Dashboard overview: hero banner, synthetic-data disclaimer, stat cards, risk spread](pictures/01-dashboard-overview.png)
+
+*Dashboard overview — hero banner, the synthetic-data disclaimer that sits on
+every view, summary stat cards, and the risk spread across all four tiers.*
+
+![Order queue table with filters and sorting](pictures/02-order-queue-filters.png)
+
+*The order queue: one row per order showing where it stands now, filterable by
+action, tier, outcome and override state.*
+
+![Order queue pagination](pictures/03-order-queue-pagination.png)
+
+*Pagination across the full 10,000-order set. The total is reported separately
+from the page, so the count is honest rather than inferred.*
+
+### Decision detail
+
+![Detail drawer showing the rule breakdown for payment exposure and customer history](pictures/04-drawer-rule-breakdown.png)
+
+*The decision drawer — every rule that fired, grouped and subtotalled, with the
+points each contributed and a plain-language reason for the outcome.*
+
+![Detail drawer open over the order queue, full-width view](pictures/05-drawer-over-queue.png)
+
+*The drawer opens over the queue, so the decision under inspection stays in the
+context of the list it came from.*
+
+![Detail drawer showing order context, deliverability, audit trail and override form](pictures/06-drawer-audit-and-override.png)
+
+*Order context and deliverability rules, then the append-only audit trail: what
+was decided, what a human did about it, and what the parcel actually did.*
+
+![Override dropdown and record-outcome form](pictures/07-override-and-outcome-forms.png)
+
+*Overriding a decision requires an action, an actor and a reason of at least ten
+characters. The recommendation is never erased — both stay on the record.*
+
+### Cost evidence
+
+![Cost evidence tab with the policy comparison bar chart](pictures/08-cost-policy-comparison-chart.png)
+
+*Net value of each policy against doing nothing. ShipGate's graduated tiers sit
+on one side of the zero line and blunt blocking on the other.*
+
+![Policy net-value table and break-even comparison](pictures/09-policy-table-and-break-even.png)
+
+*The same comparison as figures, with the gap between graduated handling and
+blocking the identical orders called out directly.*
+
+![Break-even chart, action justification table and honesty disclaimer](pictures/10-break-even-and-justification.png)
+
+*Each action's break-even against the measured failure rate of the tier that
+triggers it — an action is justified where the blue bar clears the grey one. The
+assumption this rests on, and the point at which it stops holding, is stated
+immediately underneath rather than in a footnote.*
+
+![The brief's original cost table alongside the policy comparison](pictures/11-briefs-original-cost-table.png)
+
+*The original single-cost table, kept unchanged. Under it, intervening only pays
+above a 60% failure probability — which is what motivated pricing each action
+separately.*
+
+![Segment-level PR-AUC with the where-the-rules-work honesty callout](pictures/12-segment-pr-auc-honesty.png)
+
+*Ranking quality by segment, with the limitation stated on the page itself: the
+rules are close to useless on a first-time customer, and everything they are
+good at comes from customers with delivery history.*
+
+---
+
 ## Evaluation
 
 ### How the data is built, and why it is not circular
