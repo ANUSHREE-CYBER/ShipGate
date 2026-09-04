@@ -126,11 +126,11 @@ The AI Judgment criterion asks whether the use of AI is intentional. In ShipGate
 
 A merchant needs to know exactly why an order was flagged. "The model said so" is not an acceptable answer for a COD tool where a wrong flag loses a real customer. Every ShipGate decision traces to named rules with point values, and the audit trail records which ones fired and by how much.
 
-I planned an XGBoost calibration layer as a secondary step, and chose not to ship one. On synthetic data, any lift a model showed would be an artefact of the simulation rather than evidence about the world — and a large share of the outcome variance here is hidden from *every* model by construction (a per-customer reliability trait, courier strain, weather). Shipping a model I could not show adds value, just to have a model in the repo, would be poor AI judgment, not good.
+I planned an XGBoost calibration layer as a secondary step, and chose not to ship one. On synthetic data, any lift a model showed would be an artefact of the simulation rather than evidence about the world — and a large share of the outcome variance here is hidden from any model on purpose (a per-customer reliability trait, courier strain, weather). Shipping a model just to have one in the repo, when I can't show it actually helps, would be bad AI judgment — not good.
 
 The evaluation pipeline — chronological split, PR-AUC, the cost model — is model-agnostic by design. Plug in any upstream risk score, from a vendor or a model of your own, and the policy layer still works unchanged. ShipGate is an action-selection layer, not a detection layer.
 
-That is the AI judgment on offer: knowing when *not* to use ML is as much a part of it as knowing when to.
+That's the point — knowing when *not* to use ML matters just as much as knowing when to use it.
 
 ---
 
